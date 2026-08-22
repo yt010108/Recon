@@ -1,66 +1,114 @@
-"""state.json에서 짧은 리콘 요약 보고서를 만든다."""
+"""수집 결과에서 자산, 엔드포인트 역할, 입력 지점 후보를 요약한다."""
 
 from __future__ import annotations
 
-from pathlib import Path
+import json
 from typing import Any
+from urllib.parse import parse_qsl, urljoin, urlsplit
 
-from .models import STAGE_ORDER
 from .storage import RunStore
 
 
-def build_report(store: RunStore, state: dict[str, Any]) -> Path:
-    scope = state["scope"]
-    dos_tools_used = bool(
-        scope["permissions"].get("allow_dos_tools")
-        or {"gobuster_dir", "parameth"} & state["stages"]["discovery"]["tools"].keys()
-    )
+ROLE_HINTS = {
+    "인증": ("login", "logout", "signin", "signup", "register", "auth", "oauth", "sso", "password"),
+    "관리": ("admin", "manage", "dashboard", "console", "panel"),
+    "API": ("api", "graphql", "swagger", "openapi", "rpc"),
+    "파일 처리": ("upload", "download", "export", "import", "attachment", "file"),
+    "검색": ("search", "query", "find", "filter"),
+    "사용자/객체": ("user", "account", "profile", "order", "invoice", "item", "document"),
+    "개발/운영": ("debug", "dev", "test", "internal", "health", "metrics", "actuator"),
+}
+
+SINK_HINTS = {
+    "파일 입력": ("upload", "import", "file", "attachment", "path", "filename"),
+    "외부 URL/이동": ("url", "uri", "redirect", "return", "next", "callback", "webhook"),
+    "명령·템플릿 입력": ("cmd", "command", "exec", "template", "render"),
+    "조회·식별자 입력": ("id", "user", "account", "order", "document", "item"),
+    "검색·필터 입력": ("search", "query", "q", "filter", "sort"),
+    "인증 입력": ("login", "auth", "token", "password", "reset", "oauth"),
+}
+
+
+def _lines(path) -> list[str]:
+    return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()] if path.exists() else []
+
+
+def _json(path, default: Any) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def _cell(value: Any) -> str:
+    return str(value or "-").replace("|", "\\|").replace("\n", " ")
+
+
+def _matches(url: str, hints: dict[str, tuple[str, ...]]) -> list[str]:
+    path = urlsplit(url).path.lower()
+    params = [name.lower() for name, _ in parse_qsl(urlsplit(url).query, keep_blank_values=True)]
+    return [name for name, words in hints.items() if any(word in value for value in [path, *params] for word in words)]
+
+
+def _urls(run_dir, base_url: str) -> list[str]:
+    values: set[str] = set()
+    for name in ("wayback-urls.txt", "alive-urls.txt", "katana-urls.txt"):
+        values.update(_lines(run_dir / "parsed" / name))
+    for item in _json(run_dir / "parsed" / "gobuster-dir.json", []):
+        if item.get("path"):
+            values.add(urljoin(base_url.rstrip("/") + "/", str(item["path"]).lstrip("/")))
+    for item in _json(run_dir / "parsed" / "source-endpoints.json", []):
+        if item.get("endpoint"):
+            values.add(str(item["endpoint"]))
+    return sorted(value for value in values if value.startswith(("http://", "https://")))
+
+
+def build_report(store: RunStore, state: dict[str, Any]):
+    run_dir = store.run_dir(state["run_id"])
+    base_url = state["scope"]["base_url"]
+    services = _json(run_dir / "parsed" / "httpx.json", [])
+    source_endpoints = _json(run_dir / "parsed" / "source-endpoints.json", [])
+    urls = _urls(run_dir, base_url)
+    endpoints = [(url, _matches(url, ROLE_HINTS)) for url in urls]
+    endpoints = [(url, roles or ["일반 웹"]) for url, roles in endpoints if roles or urlsplit(url).query]
+    sinks = [(url, reasons) for url in urls if (reasons := _matches(url, SINK_HINTS))]
+
     lines = [
-        f"# Recon summary: {scope['base_url']}",
-        "",
-        f"- Run: `{state['run_id']}`",
-        f"- Status: `{state['status']}`",
-        f"- Gobuster/Parameth: `{'enabled' if dos_tools_used else 'disabled'}`",
-        "",
-        "## Results",
-        "",
-        "| Stage | Tool | Status | Items | Summary |",
-        "|---|---|---|---:|---|",
+        f"# Recon: {base_url}", "",
+        f"- 상태: `{state['status']}`",
+        f"- 호스트: `{len(_lines(run_dir / 'parsed' / 'hosts.txt'))}`",
+        f"- 활성 서비스: `{len(services)}`",
+        f"- 수집 URL: `{len(urls)}`",
+        f"- 검토할 입력 지점: `{len(sinks)}`", "",
+        "## 자산", "", "| URL | 상태 | 제목 | 기술 |", "|---|---:|---|---|",
     ]
+    for item in services[:30]:
+        tech = item.get("tech") or item.get("technologies") or []
+        tech = ", ".join(map(str, tech)) if isinstance(tech, list) else tech
+        lines.append(f"| {_cell(item.get('url') or item.get('input'))} | {_cell(item.get('status_code'))} | {_cell(item.get('title'))} | {_cell(tech)} |")
+    if not services:
+        lines.append("| - | - | 활성 서비스 없음 | - |")
 
-    for stage in STAGE_ORDER:
-        stage_state = state["stages"][stage]
-        if not stage_state["tools"]:
-            lines.append(f"| {stage} | - | {stage_state['status']} | 0 | - |")
-            continue
-        for tool, result in stage_state["tools"].items():
-            summary = str(result["summary"]).replace("|", "\\|").replace("\n", " ")
-            lines.append(
-                f"| {stage} | {tool} | {result['status']} | "
-                f"{result['item_count']} | {summary} |"
-            )
+    lines.extend(["", "## 주요 엔드포인트", "", "| 역할 | URL |", "|---|---|"])
+    lines.extend(f"| {_cell(', '.join(roles))} | {_cell(url)} |" for url, roles in endpoints[:50])
+    if not endpoints:
+        lines.append("| - | 역할을 추정할 엔드포인트 없음 |")
 
-    errors = [
-        f"- `{stage}/{tool}`: {result['error']}"
-        for stage in STAGE_ORDER
-        for tool, result in state["stages"][stage]["tools"].items()
-        if result.get("error")
-    ]
-    if errors:
-        lines.extend(["", "## Errors", "", *errors])
+    lines.extend(["", "## 소스에서 찾은 경로와 액션", "", "| 유형 | 값 | 출처 |", "|---|---|---|"])
+    for item in source_endpoints[:50]:
+        lines.append(f"| {_cell(item.get('kind'))} | {_cell(item.get('endpoint') or item.get('value'))} | {_cell(item.get('source'))}:{_cell(item.get('line'))} |")
+    if not source_endpoints:
+        lines.append("| - | 발견된 후보 없음 | - |")
 
-    lines.extend(
-        [
-            "",
-            "## Evidence",
-            "",
-            "원본 출력과 robots.txt·HTML/CSS/JS 주석은 이 런의 `raw/`와 `parsed/`에 저장되어 있다.",
-            "스크린샷은 `screenshots/`에 저장한다.",
-            "",
-        ]
-    )
+    lines.extend(["", "## 우선 검토할 입력 지점", "", "경로명과 쿼리 파라미터에 따른 후보이며 취약점 판정이 아니다.", "", "| 후보 유형 | URL | 파라미터 |", "|---|---|---|"])
+    for url, reasons in sinks[:50]:
+        params = ", ".join(name for name, _ in parse_qsl(urlsplit(url).query, keep_blank_values=True)) or "-"
+        lines.append(f"| {_cell(', '.join(reasons))} | {_cell(url)} | {_cell(params)} |")
+    if not sinks:
+        lines.append("| - | 발견된 후보 없음 | - |")
 
-    destination = store.run_dir(state["run_id"]) / "report.md"
+    lines.extend(["", "## 증거", "", "원문은 `raw/`, 정리된 결과는 `parsed/`에 있다.", ""])
+    destination = run_dir / "report.md"
     destination.write_text("\n".join(lines), encoding="utf-8", newline="\n")
     store.add_artifact(state, destination, "report", "harness")
     store.save(state)

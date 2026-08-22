@@ -13,6 +13,7 @@ from recon_harness.tools import (
     _candidate_source_urls,
     _extract_c_style_comments,
     _extract_html_comments,
+    _extract_source_endpoints,
     _response_body,
 )
 
@@ -46,6 +47,22 @@ def result_with_record(record: dict[str, object]) -> CommandResult:
 
 
 class ParserTests(unittest.TestCase):
+    def test_source_endpoint_patterns_are_extracted_offline(self) -> None:
+        source = """fetch('/api/orders?id=1')
+<form action="/login">
+const action_id = 'abc123';
+axios.post("https://example.com/graphql")"""
+        findings = _extract_source_endpoints(source)
+        self.assertEqual(
+            {(item["kind"], item["value"]) for item in findings},
+            {
+                ("api-path", "/api/orders?id=1"),
+                ("request", "/api/orders?id=1"),
+                ("form-action", "/login"),
+                ("action-id", "abc123"),
+                ("request", "https://example.com/graphql"),
+            },
+        )
     def test_response_body_removes_http_headers(self) -> None:
         record = {"response": "HTTP/1.1 200 OK\r\nX-Test: yes\r\n\r\nbody\ntext"}
         self.assertEqual(_response_body(record), "body\ntext")
@@ -131,7 +148,7 @@ class AdapterTests(unittest.TestCase):
         (run_dir / "parsed" / "katana-urls.txt").write_text(
             "http://recon-juice-shop:3000/app.js\n", encoding="utf-8"
         )
-        source = "const url = 'https://safe.test';\n/* secret=VISIBLE\nsecond line */"
+        source = "fetch('/api/orders?id=1');\nconst action_id = 'abc123';\n/* secret=VISIBLE\nsecond line */"
         record = {
             "url": "http://recon-juice-shop:3000/app.js",
             "status_code": 200,
@@ -146,6 +163,11 @@ class AdapterTests(unittest.TestCase):
             (run_dir / "parsed" / "source-comments.json").read_text(encoding="utf-8")
         )
         self.assertEqual(parsed[0]["text"], " secret=VISIBLE\nsecond line ")
+        endpoints = json.loads(
+            (run_dir / "parsed" / "source-endpoints.json").read_text(encoding="utf-8")
+        )
+        self.assertTrue(any(item.get("endpoint", "").endswith("/api/orders?id=1") for item in endpoints))
+        self.assertTrue(any(item["kind"] == "action-id" and item["value"] == "abc123" for item in endpoints))
         self.assertNotIn(
             "VISIBLE",
             (run_dir / "raw" / "source_comments.jsonl").read_text(encoding="utf-8"),

@@ -1,4 +1,4 @@
-"""런별 상태, 감사 이벤트, 아티팩트를 파일로 보존한다."""
+"""런 상태와 진행 상황을 progress.md 하나에 보존한다."""
 
 from __future__ import annotations
 
@@ -24,22 +24,26 @@ def _slug(value: str) -> str:
     return normalized[:48] or "scope"
 
 
-def atomic_write_json(path: Path, payload: Any) -> None:
-    # 중단 시 state.json이 반쯤 쓰인 상태로 남지 않도록 같은 디렉터리에서 교체한다.
+def atomic_write_text(path: Path, text: str) -> None:
+    """중단 중에도 진행 파일이 반쯤 쓰이지 않도록 원자적으로 교체한다."""
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
     )
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-            json.dump(payload, stream, ensure_ascii=False, indent=2)
-            stream.write("\n")
+            stream.write(text)
         os.replace(temporary_name, path)
     finally:
         try:
             os.unlink(temporary_name)
         except FileNotFoundError:
             pass
+
+
+def atomic_write_json(path: Path, payload: Any) -> None:
+    """파싱 결과 JSON도 같은 방식으로 안전하게 기록한다."""
+    atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
 
 
 class RunStore:
@@ -74,7 +78,6 @@ class RunStore:
         }
         shutil.copyfile(scope_path, run_dir / "scope.toml")
         self.save(state)
-        self.append_event(run_id, "run_created", {"scope": scope_snapshot["name"]})
         return state
 
     def run_dir(self, run_id: str) -> Path:
@@ -86,15 +89,16 @@ class RunStore:
         return path
 
     def load(self, run_id: str) -> dict[str, Any]:
-        path = self.run_dir(run_id) / "state.json"
+        path = self.run_dir(run_id) / "progress.md"
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except OSError as exc:
+            text = path.read_text(encoding="utf-8")
+            payload = text.split("<!-- recon-state\n", 1)[1].split("\n-->", 1)[0]
+            return json.loads(payload)
+        except (OSError, IndexError, json.JSONDecodeError) as exc:
             raise FileNotFoundError(f"Unknown run: {run_id}") from exc
 
     def save(self, state: dict[str, Any]) -> None:
         state["updated_at"] = utc_now()
-        atomic_write_json(self.run_dir(state["run_id"]) / "state.json", state)
         self._write_progress(state)
 
     def _write_progress(self, state: dict[str, Any]) -> None:
@@ -122,16 +126,10 @@ class RunStore:
             item = state["stages"][stage]
             tools = ", ".join(item["tools"]) if item["tools"] else "-"
             lines.append(f"| {stage} | {item['status']} | {tools} |")
-        lines.extend(["", "Pi는 `state.json`과 `events.jsonl`을 기준으로 이 실행을 재개한다.", ""])
-        (self.run_dir(state["run_id"]) / "progress.md").write_text(
-            "\n".join(lines), encoding="utf-8", newline="\n"
-        )
-
-    def append_event(self, run_id: str, event_type: str, data: dict[str, Any]) -> None:
-        record = {"time": utc_now(), "type": event_type, "data": data}
-        path = self.run_dir(run_id) / "events.jsonl"
-        with path.open("a", encoding="utf-8", newline="\n") as stream:
-            stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+        lines.extend(["", "이 파일만으로 실행 상태를 확인하고 재개한다.", ""])
+        metadata = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+        content = f"<!-- recon-state\n{metadata}\n-->\n\n" + "\n".join(lines)
+        atomic_write_text(self.run_dir(state["run_id"]) / "progress.md", content)
 
     def add_artifact(self, state: dict[str, Any], path: Path, kind: str, tool: str) -> None:
         relative = path.resolve().relative_to(self.run_dir(state["run_id"]))
@@ -141,9 +139,9 @@ class RunStore:
 
     def list_runs(self) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
-        for state_path in self.root.glob("*/state.json"):
+        for progress_path in self.root.glob("*/progress.md"):
             try:
-                results.append(json.loads(state_path.read_text(encoding="utf-8")))
-            except (OSError, json.JSONDecodeError):
+                results.append(self.load(progress_path.parent.name))
+            except FileNotFoundError:
                 continue
         return sorted(results, key=lambda item: item.get("created_at", ""), reverse=True)

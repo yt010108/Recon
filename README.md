@@ -50,8 +50,6 @@ Pi는 딱 두 가지만 묻는다.
 ```text
 runs/<RUN_ID>/
 ├── scope.toml
-├── state.json
-├── events.jsonl
 ├── progress.md
 ├── report.md
 ├── raw/
@@ -67,7 +65,7 @@ domain = "example.com"
 dos_allowed = false
 ```
 
-`report.md`는 단계·도구·상태·결과 개수만 요약한다. `robots.txt`와 HTML/CSS/JS 주석 원문은 `raw/`와 `parsed/`에 그대로 남는다.
+`report.md`는 발견 자산, 엔드포인트 역할, 우선 검토할 입력 지점 후보를 요약한다. 이미 받은 HTML/JS에서도 API 경로, 요청·폼 경로와 action ID를 오프라인으로 추출한다. 후보는 경로와 파라미터 기반의 검토 우선순위이며 취약점 판정이 아니다. `robots.txt`와 HTML/CSS/JS 주석 원문은 `raw/`와 `parsed/`에 그대로 남는다.
 
 ## 도구
 

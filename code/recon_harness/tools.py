@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from .docker_backend import CommandResult, DockerBackend
 from .policy import PolicyError, ScopePolicy
@@ -155,6 +155,40 @@ def _extract_html_comments(source: str) -> list[dict[str, Any]]:
                 comment["line"] += line_offset
                 comments.append(comment)
     return comments
+
+
+# 이미 받은 소스만 검사한다. 이 패턴들은 새 URL에 요청을 보내지 않는다.
+_ENDPOINT_PATTERNS = (
+    ("api-path", re.compile(r'''["'`]((?:/(?:api|rest|graphql|v\d+))(?:[/?][^"'`\s<>\\]*)?)["'`]''', re.IGNORECASE)),
+    ("request", re.compile(r'''(?:fetch|axios(?:\.(?:get|post|put|patch|delete))?)\s*\(\s*["'`]((?:https?://|/)[^"'`\s<>\\]+)["'`]''', re.IGNORECASE)),
+    ("form-action", re.compile(r'''\baction\s*=\s*["'`]([^"'`\s<>]+)["'`]''', re.IGNORECASE)),
+    ("action-id", re.compile(r'''\b(?:action[-_]?id|next-action)\b\s*[:=]\s*["'`]([^"'`\s<>]+)["'`]''', re.IGNORECASE)),
+)
+
+
+def _extract_source_endpoints(source: str) -> list[dict[str, Any]]:
+    """소스의 경로와 action ID 후보를 출처 위치와 함께 중복 제거한다."""
+    findings: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for kind, pattern in _ENDPOINT_PATTERNS:
+        for match in pattern.finditer(source):
+            value = match.group(1)
+            key = (kind, value)
+            if key in seen:
+                continue
+            seen.add(key)
+            line_start = source.rfind("\n", 0, match.start()) + 1
+            line_end = source.find("\n", match.end())
+            context = source[line_start : len(source) if line_end < 0 else line_end].strip()
+            findings.append(
+                {
+                    "kind": kind,
+                    "value": value,
+                    "line": source.count("\n", 0, match.start()) + 1,
+                    "context": context[:240],
+                }
+            )
+    return findings
 
 
 def _source_kind(url: str, record: dict[str, Any]) -> str | None:
@@ -586,7 +620,9 @@ class ToolRunner:
         )
         records = self._write_sanitized_httpx_result(state, "source_comments", result)
         findings: list[dict[str, Any]] = []
+        endpoints: list[dict[str, Any]] = []
         seen: set[tuple[str, int, str, str]] = set()
+        seen_endpoints: set[tuple[str, str, str]] = set()
         reviewed = 0
         for record in records:
             url = str(record.get("url") or record.get("input") or "")
@@ -603,6 +639,19 @@ class ToolRunner:
                 comments = _extract_html_comments(body)
             else:
                 comments = _extract_c_style_comments(body, kind)
+            for candidate in _extract_source_endpoints(body):
+                endpoint = None
+                if candidate["kind"] != "action-id":
+                    endpoint = urlunsplit(urlsplit(urljoin(url, candidate["value"]))._replace(fragment=""))
+                    try:
+                        policy.validate_url(endpoint)
+                    except PolicyError:
+                        continue
+                key = (url, candidate["kind"], endpoint or candidate["value"])
+                if key in seen_endpoints:
+                    continue
+                seen_endpoints.add(key)
+                endpoints.append({"source": url, "endpoint": endpoint, **candidate})
             for comment in comments[:max_per_file]:
                 text = str(comment["text"])
                 key = (url, int(comment["line"]), str(comment["syntax"]), text)
@@ -623,10 +672,13 @@ class ToolRunner:
         parsed = run_dir / "parsed" / "source-comments.json"
         atomic_write_json(parsed, findings)
         self.store.add_artifact(state, parsed, "parsed", "source_comments")
+        endpoint_path = run_dir / "parsed" / "source-endpoints.json"
+        atomic_write_json(endpoint_path, endpoints)
+        self.store.add_artifact(state, endpoint_path, "parsed", "source_comments")
         return ToolOutcome(
             result.exit_code,
-            f"Reviewed {reviewed} source responses and recorded {len(findings)} comments",
-            len(findings),
+            f"Reviewed {reviewed} source responses; recorded {len(findings)} comments and {len(endpoints)} endpoint/action candidates",
+            len(findings) + len(endpoints),
             error=result.stderr.strip(),
         )
 

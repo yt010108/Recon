@@ -54,24 +54,16 @@ class HarnessRunner:
         )
         state["status"] = "running"
         self.store.save(state)
-        self.store.append_event(
-            run_id,
-            "stage_started",
-            {"stage": normalized},
-        )
-
         failures = 0
         enabled = [tool for tool in tools_for_stage(normalized) if policy.is_tool_enabled(tool)]
         if not enabled:
             stage_state["status"] = "skipped"
             stage_state["finished_at"] = utc_now()
-            self.store.append_event(run_id, "stage_skipped", {"stage": normalized})
             self.store.save(state)
             return state
 
         try:
             for tool in enabled:
-                self.store.append_event(run_id, "tool_started", {"tool": tool})
                 outcome = tool_runner.run(tool, policy, state)
                 tool_status = "skipped" if outcome.skipped else (
                     "completed" if outcome.exit_code == 0 else "failed"
@@ -85,25 +77,12 @@ class HarnessRunner:
                     "item_count": outcome.item_count,
                     "error": outcome.error,
                 }
-                self.store.append_event(
-                    run_id,
-                    "tool_finished",
-                    {
-                        "tool": tool,
-                        "status": tool_status,
-                        "exit_code": outcome.exit_code,
-                        "item_count": outcome.item_count,
-                    },
-                )
                 self.store.save(state)
         except (Exception, KeyboardInterrupt) as exc:
             stage_state["status"] = "failed"
             stage_state["error"] = str(exc)
             stage_state["finished_at"] = utc_now()
             state["status"] = "failed"
-            self.store.append_event(
-                run_id, "stage_failed", {"stage": normalized, "error": str(exc)}
-            )
             self.store.save(state)
             raise
 
@@ -115,11 +94,6 @@ class HarnessRunner:
             for stage in STAGE_ORDER
         )
         state["status"] = "completed" if completed else "ready"
-        self.store.append_event(
-            run_id,
-            "stage_finished",
-            {"stage": normalized, "status": stage_state["status"]},
-        )
         self.store.save(state)
         return state
 
@@ -131,7 +105,6 @@ class HarnessRunner:
                 item = state["stages"][stage]
                 item["status"] = "skipped"
                 item["finished_at"] = utc_now()
-                self.store.append_event(run_id, "stage_skipped", {"stage": stage})
                 self.store.save(state)
                 continue
             state = self._run_stage(run_id, stage)

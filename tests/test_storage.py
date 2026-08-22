@@ -14,14 +14,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class RunStoreTests(unittest.TestCase):
-    def test_create_freezes_scope_and_persists_events(self) -> None:
+    def test_create_freezes_scope_and_persists_progress(self) -> None:
         policy = ScopePolicy.load(PROJECT_ROOT / "tests" / "lab" / "scope.toml")
         with tempfile.TemporaryDirectory() as temporary:
             store = RunStore(temporary)
             state = store.create(policy.path, policy.snapshot())
             run_dir = store.run_dir(state["run_id"])
             self.assertTrue((run_dir / "scope.toml").is_file())
-            self.assertTrue((run_dir / "events.jsonl").is_file())
+            self.assertFalse((run_dir / "state.json").exists())
+            self.assertFalse((run_dir / "events.jsonl").exists())
             self.assertTrue((run_dir / "screenshots").is_dir())
             self.assertTrue((run_dir / "progress.md").is_file())
             loaded = store.load(state["run_id"])
@@ -45,13 +46,22 @@ class RunStoreTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            (store.run_dir(state["run_id"]) / "parsed" / "hosts.txt").write_text(
+                "recon-juice-shop\n", encoding="utf-8"
+            )
+            (store.run_dir(state["run_id"]) / "parsed" / "katana-urls.txt").write_text(
+                "http://recon-juice-shop:3000/api/orders?id=1\n",
+                encoding="utf-8",
+            )
             report = build_report(store, state)
             self.assertTrue(report.is_file())
             loaded = store.load(state["run_id"])
             self.assertTrue(any(item["path"] == "report.md" for item in loaded["artifacts"]))
             text = report.read_text(encoding="utf-8")
             self.assertIn("http://recon-juice-shop:3000", text)
-            self.assertIn("## Evidence", text)
+            self.assertIn("## 주요 엔드포인트", text)
+            self.assertIn("## 우선 검토할 입력 지점", text)
+            self.assertIn("조회·식별자 입력", text)
             self.assertNotIn("SAMPLE-ORIGINAL-VALUE", text)
 
     def test_invalid_run_id_is_rejected(self) -> None:

@@ -10,6 +10,7 @@ recon-harness = "recon_harness.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "code"}
+py-modules = ["dorkgen"]
 
 [tool.setuptools.packages.find]
 where = ["code"]

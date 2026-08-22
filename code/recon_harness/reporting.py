@@ -68,6 +68,7 @@ def build_report(store: RunStore, state: dict[str, Any]):
     base_url = state["scope"]["base_url"]
     services = _json(run_dir / "parsed" / "httpx.json", [])
     source_endpoints = _json(run_dir / "parsed" / "source-endpoints.json", [])
+    dorks = _lines(run_dir / "parsed" / "google-dorks.txt")
     urls = _urls(run_dir, base_url)
     endpoints = [(url, _matches(url, ROLE_HINTS)) for url in urls]
     endpoints = [(url, roles or ["일반 웹"]) for url, roles in endpoints if roles or urlsplit(url).query]
@@ -106,6 +107,12 @@ def build_report(store: RunStore, state: dict[str, Any]):
         lines.append(f"| {_cell(', '.join(reasons))} | {_cell(url)} | {_cell(params)} |")
     if not sinks:
         lines.append("| - | 발견된 후보 없음 | - |")
+
+    lines.extend([
+        "", "## Google Dorks", "",
+        f"Google 요청 없이 검색식 `{len(dorks)}`개를 생성했다: `parsed/google-dorks.txt`"
+        if dorks else "생성된 검색식이 없다.",
+    ])
 
     lines.extend(["", "## 증거", "", "원문은 `raw/`, 정리된 결과는 `parsed/`에 있다.", ""])
     destination = run_dir / "report.md"

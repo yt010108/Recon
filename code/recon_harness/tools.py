@@ -12,6 +12,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 from .docker_backend import CommandResult, DockerBackend
 from .policy import PolicyError, ScopePolicy
 from .storage import RunStore, atomic_write_json
+from dorkgen import generate_dorks
 
 
 @dataclass(slots=True)
@@ -21,6 +22,17 @@ class ToolOutcome:
     item_count: int = 0
     skipped: bool = False
     error: str = ""
+
+
+def run_local_dorkgen(
+    policy: ScopePolicy, state: dict[str, Any], store: RunStore
+) -> ToolOutcome:
+    """Google에 접속하지 않고 검색식만 run 아티팩트로 생성한다."""
+    dorks = generate_dorks(policy.root_domain)
+    destination = store.run_dir(state["run_id"]) / "parsed" / "google-dorks.txt"
+    destination.write_text("\n".join(dorks) + "\n", encoding="utf-8", newline="\n")
+    store.add_artifact(state, destination, "queries", "dorkgen")
+    return ToolOutcome(0, f"Generated {len(dorks)} Google dork queries offline", len(dorks))
 
 
 def _unique_lines(text: str) -> list[str]:
@@ -311,6 +323,9 @@ class ToolRunner:
         if method is None:
             raise ValueError(f"No adapter for tool: {tool}")
         return method(policy, state)
+
+    def run_dorkgen(self, policy: ScopePolicy, state: dict[str, Any]) -> ToolOutcome:
+        return run_local_dorkgen(policy, state, self.store)
 
     @staticmethod
     def _host_in_scope(policy: ScopePolicy, host: str) -> bool:

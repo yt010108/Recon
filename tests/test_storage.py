@@ -53,6 +53,9 @@ class RunStoreTests(unittest.TestCase):
                 "http://recon-juice-shop:3000/api/orders?id=1\n",
                 encoding="utf-8",
             )
+            (store.run_dir(state["run_id"]) / "parsed" / "google-dorks.txt").write_text(
+                "site:recon-juice-shop\n", encoding="utf-8"
+            )
             report = build_report(store, state)
             self.assertTrue(report.is_file())
             loaded = store.load(state["run_id"])
@@ -62,6 +65,7 @@ class RunStoreTests(unittest.TestCase):
             self.assertIn("## 주요 엔드포인트", text)
             self.assertIn("## 우선 검토할 입력 지점", text)
             self.assertIn("조회·식별자 입력", text)
+            self.assertIn("## Google Dorks", text)
             self.assertNotIn("SAMPLE-ORIGINAL-VALUE", text)
 
     def test_invalid_run_id_is_rejected(self) -> None:

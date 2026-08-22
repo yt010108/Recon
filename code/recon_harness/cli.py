@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 from . import __version__
 from .docker_backend import DEFAULT_IMAGE, BackendError, DockerBackend
-from .models import TOOL_NAMES
+from .models import LOCAL_TOOLS, STAGE_ORDER, TOOL_NAMES
 from .policy import PolicyError, ScopePolicy
 from .reporting import build_report
 from .runner import HarnessRunner
@@ -66,24 +66,56 @@ def _state_summary(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def cmd_start(args: argparse.Namespace) -> int:
+def _create_run(domain: str, dos_allowed: bool) -> tuple[RunStore, dict[str, Any]]:
     store = _store()
     with tempfile.TemporaryDirectory(prefix="recon-scope-") as temporary:
         scope_path = Path(temporary) / "scope.toml"
         scope_path.write_text(
-            render_scope_toml(args.domain, args.dos_allowed),
+            render_scope_toml(domain, dos_allowed),
             encoding="utf-8",
             newline="\n",
         )
         policy = ScopePolicy.load(scope_path)
         state = store.create(policy.path, policy.snapshot())
+    return store, state
 
-    state = HarnessRunner(store).run_all(state["run_id"])
+
+def _emit_with_report(store: RunStore, state: dict[str, Any]) -> int:
     report = build_report(store, state)
     summary = _state_summary(store.load(state["run_id"]))
     summary["report"] = str(report)
     _emit(summary)
     return 0
+
+
+def cmd_create(args: argparse.Namespace) -> int:
+    _store_value, state = _create_run(args.domain, args.dos_allowed)
+    _emit(_state_summary(state))
+    return 0
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    store, state = _create_run(args.domain, args.dos_allowed)
+
+    state = HarnessRunner(store).run_all(state["run_id"])
+    return _emit_with_report(store, state)
+
+
+def cmd_stage(args: argparse.Namespace) -> int:
+    store = _store()
+    state = HarnessRunner(store).run_stage(args.run, args.stage)
+    return _emit_with_report(store, state)
+
+
+def cmd_tool(args: argparse.Namespace) -> int:
+    store = _store()
+    state = HarnessRunner(store).run_tool(args.run, args.tool)
+    return _emit_with_report(store, state)
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    store = _store()
+    return _emit_with_report(store, store.load(args.run))
 
 
 def cmd_list(_args: argparse.Namespace) -> int:
@@ -108,7 +140,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             "source_comments": "httpx",
             "amass_enum": "amass",
         }
-        for name in sorted({command_names.get(tool, tool) for tool in TOOL_NAMES}):
+        for name in sorted({command_names.get(tool, tool) for tool in TOOL_NAMES - LOCAL_TOOLS}):
             result = backend.run(["which", name], process_timeout=20)
             tools[name] = {
                 "available": result.exit_code == 0,
@@ -132,6 +164,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also run Gobuster and Parameth",
     )
     start.set_defaults(handler=cmd_start)
+
+    create = commands.add_parser("create", help="Create a run without network requests")
+    create.add_argument("domain")
+    create.add_argument("--dos-allowed", action="store_true")
+    create.set_defaults(handler=cmd_create)
+
+    stage = commands.add_parser("stage", help="Run one stage in an existing run")
+    stage.add_argument("--run", required=True)
+    stage.add_argument("stage", choices=STAGE_ORDER)
+    stage.set_defaults(handler=cmd_stage)
+
+    tool = commands.add_parser("tool", help="Run one tool in an existing run")
+    tool.add_argument("--run", required=True)
+    tool.add_argument("tool", choices=sorted(TOOL_NAMES))
+    tool.set_defaults(handler=cmd_tool)
+
+    report = commands.add_parser("report", help="Rebuild one run report offline")
+    report.add_argument("--run", required=True)
+    report.set_defaults(handler=cmd_report)
 
     listing = commands.add_parser("list", help="List runs")
     listing.set_defaults(handler=cmd_list)

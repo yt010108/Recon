@@ -11,13 +11,14 @@ STAGE_PERMISSIONS = {
 }
 
 STAGE_TOOLS = {
-    "collect": ("subfinder", "assetfinder", "amass_enum", "waybackurls"),
+    "collect": ("dorkgen", "subfinder", "assetfinder", "amass_enum", "waybackurls"),
     "probe": ("httpx", "robots_txt"),
     "crawl": ("katana", "source_comments"),
     "discovery": ("gobuster_dir", "parameth"),
 }
 
 TOOL_NAMES = frozenset(tool for tools in STAGE_TOOLS.values() for tool in tools)
+LOCAL_TOOLS = frozenset({"dorkgen"})
 
 
 def validate_stage(stage: str) -> str:
@@ -30,3 +31,12 @@ def validate_stage(stage: str) -> str:
 
 def tools_for_stage(stage: str) -> tuple[str, ...]:
     return STAGE_TOOLS[validate_stage(stage)]
+
+
+def stage_for_tool(tool: str) -> str:
+    normalized = tool.strip().lower()
+    for stage, tools in STAGE_TOOLS.items():
+        if normalized in tools:
+            return stage
+    choices = ", ".join(sorted(TOOL_NAMES))
+    raise ValueError(f"Unknown tool {tool!r}; expected one of: {choices}")

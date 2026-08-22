@@ -9,9 +9,21 @@ from recon_harness.cli import render_scope_toml
 from recon_harness.policy import ScopePolicy
 from recon_harness.runner import HarnessRunner
 from recon_harness.storage import RunStore
+from recon_harness.tools import ToolOutcome
 
 
 class RunnerSelectionTests(unittest.TestCase):
+    def _created_run(self, dos_allowed: bool = False):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        scope_path = root / "scope.toml"
+        scope_path.write_text(render_scope_toml("example.com", dos_allowed), encoding="utf-8")
+        policy = ScopePolicy.load(scope_path)
+        store = RunStore(root / "runs")
+        state = store.create(scope_path, policy.snapshot())
+        return store, state
+
     def _run(self, dos_allowed: bool) -> tuple[list[str], dict]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -45,6 +57,38 @@ class RunnerSelectionTests(unittest.TestCase):
     def test_discovery_runs_when_dos_tools_are_allowed(self) -> None:
         called, _state = self._run(True)
         self.assertEqual(called, ["collect", "probe", "crawl", "discovery"])
+
+    def test_one_stage_can_run_without_previous_stage(self) -> None:
+        store, state = self._created_run()
+        runner = HarnessRunner(store)
+        with patch.object(runner, "_run_stage", return_value=state) as selected:
+            runner.run_stage(state["run_id"], "crawl")
+        selected.assert_called_once_with(state["run_id"], "crawl", require_previous=False)
+
+    def test_one_tool_is_recorded_as_partial_stage(self) -> None:
+        store, state = self._created_run()
+        runner = HarnessRunner(store)
+        with (
+            patch("recon_harness.runner.DockerBackend") as backend,
+            patch("recon_harness.runner.DeepDiscoveryToolRunner") as tools,
+        ):
+            backend.return_value.require_ready.return_value = None
+            tools.return_value.run.return_value = ToolOutcome(0, "one host", 1)
+            result = runner.run_tool(state["run_id"], "subfinder")
+        self.assertEqual(result["stages"]["collect"]["status"], "partial")
+        self.assertEqual(result["stages"]["collect"]["tools"]["subfinder"]["item_count"], 1)
+
+    def test_disabled_individual_tool_is_rejected(self) -> None:
+        store, state = self._created_run(False)
+        with self.assertRaises(ValueError):
+            HarnessRunner(store).run_tool(state["run_id"], "gobuster_dir")
+
+    def test_dorkgen_individual_run_does_not_start_docker(self) -> None:
+        store, state = self._created_run()
+        with patch("recon_harness.runner.DockerBackend") as backend:
+            result = HarnessRunner(store).run_tool(state["run_id"], "dorkgen")
+        backend.assert_not_called()
+        self.assertEqual(result["stages"]["collect"]["tools"]["dorkgen"]["status"], "completed")
 
 
 if __name__ == "__main__":

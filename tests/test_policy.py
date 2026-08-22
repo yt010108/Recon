@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from recon_harness.cli import render_scope_toml
-from recon_harness.models import STAGE_ORDER
+from recon_harness.models import STAGE_ORDER, stage_for_tool
 from recon_harness.policy import PolicyError, ScopePolicy
 
 
@@ -20,6 +20,7 @@ class ScopePolicyTests(unittest.TestCase):
         self.assertEqual(policy.worker_image, "local/hermes-recon-web:0.1")
         self.assertTrue(policy.is_tool_enabled("robots_txt"))
         self.assertTrue(policy.is_tool_enabled("source_comments"))
+        self.assertTrue(policy.is_tool_enabled("dorkgen"))
         self.assertIsNone(policy.docker_network)
         self.assertEqual(policy.validate_url("https://example.com/"), "https://example.com/")
         self.assertEqual(
@@ -46,6 +47,10 @@ class ScopePolicyTests(unittest.TestCase):
         policy = ScopePolicy.load(LAB_SCOPE)
         with self.assertRaises(ValueError):
             policy.validate_stage("scan")
+
+    def test_tool_maps_to_its_stage(self) -> None:
+        self.assertEqual(stage_for_tool("httpx"), "probe")
+        self.assertEqual(stage_for_tool("source_comments"), "crawl")
 
     def test_pi_scope_contains_only_domain_and_dos_choice(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

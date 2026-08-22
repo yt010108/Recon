@@ -8,7 +8,7 @@
 Recon/
 ├── AGENTS.md
 ├── README.md
-├── .pi/                    # /recon, recon_start, Pi 규칙
+├── .pi/                    # /recon, 전체·개별 실행 도구, Pi 규칙
 ├── code/recon_harness/     # 정책, 실행, 저장, 요약 보고서
 ├── docker/                 # 웹 리콘 작업자와 작은 wordlist
 ├── tests/                  # 단위 테스트와 Juice Shop 랩
@@ -38,7 +38,7 @@ Pi는 딱 두 가지만 묻는다.
 
 | 실행 조건 | 도구 |
 |---|---|
-| 항상 | Subfinder, Assetfinder, Amass `-passive`, Waybackurls |
+| 항상 | Dorkgen(검색식만 생성), Subfinder, Assetfinder, Amass `-passive`, Waybackurls |
 | 항상 | HTTPX, `robots.txt` |
 | 항상 | Katana depth 4, HTML/CSS/JS 주석·엔드포인트·프런트엔드 자산 수집 |
 | 대량 요청 허용 시만 | Gobuster dir, Parameth |
@@ -71,6 +71,7 @@ dos_allowed = false
 
 | 도구 | 역할 | 설치 방식/고정값 |
 |---|---|---|
+| Dorkgen | Google 검색식 생성 | Python 표준 라이브러리, Google 요청 없음 |
 | Subfinder | 서브도메인 후보 | Kali 패키지 |
 | Assetfinder | CT 로그·아카이브 후보 | Go `v0.1.0` |
 | Amass | 패시브 서브도메인 후보 | Kali 패키지, `-passive` 고정 |
@@ -91,12 +92,25 @@ Nuclei, Nmap, Metasploit, DNS brute force와 전체 SecLists는 포함하지 않
 ## 직접 CLI
 
 ```powershell
+# 전체 실행
 recon-harness start example.com
 recon-harness start example.com --dos-allowed
+
+# 개별 실행: run을 만든 뒤 단계나 도구를 원하는 만큼 누적 실행
+recon-harness create example.com
+recon-harness stage --run RUN_ID collect
+recon-harness stage --run RUN_ID crawl
+recon-harness tool --run RUN_ID subfinder
+recon-harness tool --run RUN_ID dorkgen
+recon-harness tool --run RUN_ID httpx
+recon-harness report --run RUN_ID
+
 recon-harness list
 recon-harness status --run RUN_ID
 recon-harness doctor
 ```
+
+개별 실행도 생성 당시 `scope.toml`을 그대로 적용한다. `dos_allowed = false`인 run에서는 Gobuster와 Parameth를 개별 지정해도 실행되지 않는다.
 
 ## 테스트
 

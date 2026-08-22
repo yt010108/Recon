@@ -140,6 +140,16 @@ class AdapterTests(unittest.TestCase):
         )
         self.assertNotIn("-fr", backend.commands[0])
 
+    def test_dorkgen_writes_queries_without_backend_calls(self) -> None:
+        backend = FakeBackend()
+        outcome = ToolRunner(backend, self.store).run_dorkgen(self.policy, self.state)
+        path = self.store.run_dir(self.state["run_id"]) / "parsed" / "google-dorks.txt"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        self.assertGreater(len(lines), 50)
+        self.assertEqual(lines[0], "site:recon-juice-shop")
+        self.assertEqual(outcome.item_count, len(lines))
+        self.assertEqual(backend.commands, [])
+
     def test_source_adapter_keeps_exact_multiline_comment(self) -> None:
         run_dir = self.store.run_dir(self.state["run_id"])
         (run_dir / "parsed" / "alive-urls.txt").write_text(

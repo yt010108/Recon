@@ -67,11 +67,56 @@ export default function (pi: ExtensionAPI) {
     if (event.toolName !== "bash") return undefined;
     const input = event.input as { command?: unknown };
     const command = typeof input.command === "string" ? input.command : "";
-    const directRecon = /(?:^|\s)(?:docker\s+(?:container\s+)?(?:exec|run)|subfinder|assetfinder|amass|httpx|waybackurls|katana|gobuster|parameth)(?:\s|$)|recon_harness\.cli\s+start/i;
+    const directRecon = /(?:^|\s)(?:docker\s+(?:container\s+)?(?:exec|run)|subfinder|assetfinder|amass|httpx|waybackurls|katana|gobuster|parameth)(?:\s|$)|recon_harness\.cli\s+(?:start|create|stage|tool)/i;
     if (directRecon.test(command)) {
-      return { block: true, reason: "리콘은 recon_start를 통해서만 실행합니다." };
+      return { block: true, reason: "리콘은 recon_* 전용 도구를 통해 실행합니다." };
     }
     return undefined;
+  });
+
+  pi.registerTool({
+    name: "recon_create",
+    label: "Recon: Run 생성",
+    description: "Create a scoped run without sending network requests.",
+    parameters: Type.Object({
+      domain: Type.String(),
+      dos_allowed: Type.Boolean(),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const args = ["create", params.domain];
+      if (params.dos_allowed) args.push("--dos-allowed");
+      return toolResult(await runCli(args, signal));
+    },
+  });
+
+  pi.registerTool({
+    name: "recon_run",
+    label: "Recon: 개별 실행",
+    description: "Run one stage or one tool inside an existing scoped run.",
+    parameters: Type.Object({
+      run_id: Type.String(),
+      target: Type.Union([
+        Type.Literal("collect"), Type.Literal("probe"), Type.Literal("crawl"), Type.Literal("discovery"),
+        Type.Literal("dorkgen"), Type.Literal("subfinder"), Type.Literal("assetfinder"), Type.Literal("amass_enum"), Type.Literal("waybackurls"),
+        Type.Literal("httpx"), Type.Literal("robots_txt"), Type.Literal("katana"), Type.Literal("source_comments"),
+        Type.Literal("gobuster_dir"), Type.Literal("parameth"),
+      ]),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const stages = new Set(["collect", "probe", "crawl", "discovery"]);
+      const command = stages.has(params.target) ? "stage" : "tool";
+      return toolResult(await runCli([command, "--run", params.run_id, params.target], signal));
+    },
+  });
+
+  pi.registerTool({
+    name: "recon_report",
+    label: "Recon: 보고서 갱신",
+    description: "Rebuild report.md from stored artifacts without network requests.",
+    parameters: Type.Object({ run_id: Type.String() }),
+    async execute(_toolCallId, params, signal) {
+      return toolResult(await runCli(["report", "--run", params.run_id], signal));
+    },
   });
 
   pi.registerTool({

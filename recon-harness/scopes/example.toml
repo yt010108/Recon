@@ -1,0 +1,41 @@
+[scope]
+name = "Example Bug Bounty"
+kind = "bugbounty"
+authorization_reference = "Replace with the program policy URL or authorization ticket"
+
+[worker]
+image = "local/hermes-recon-web:0.1"
+
+[targets]
+base_url = "https://example.com"
+domains = ["example.com"]
+cidrs = []
+base_urls = []
+excluded_hosts = ["status.example.com"]
+excluded_paths = ["/logout", "/delete-account"]
+allowed_ports = [80, 443]
+
+[limits]
+rate_limit = 10
+concurrency = 5
+timeout_seconds = 10
+
+[permissions]
+allow_passive_collection = true
+allow_http_probing = true
+allow_crawling = false
+allow_content_discovery = false
+allow_dns_bruteforce = false
+
+[tools]
+enabled = ["subfinder", "assetfinder", "amass_enum", "waybackurls", "httpx", "robots_txt", "katana", "source_comments", "gobuster_dir", "gobuster_dns", "parameth"]
+crawl_depth = 2
+robots_max_bytes = 262144
+comment_max_files = 100
+comment_max_bytes = 1048576
+comment_max_per_file = 100
+gobuster_wordlist = "/opt/recon-wordlists/web-common.txt"
+dns_wordlist = "/opt/recon-wordlists/dns-5000.txt"
+parameth_wordlist = "/opt/recon-wordlists/params-small.txt"
+parameth_delay = 1
+parameth_threads = 3

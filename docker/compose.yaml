@@ -1,0 +1,19 @@
+services:
+  kali-security:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        KALI_TOOLS: "gobuster subfinder httpx-toolkit"
+        WAYBACKURLS_VERSION: "v0.1.0"
+        KATANA_VERSION: "v1.7.0"
+        PARAMETH_COMMIT: "8da6f27c071f00bc0bd26a565de474e7ab5baa42"
+        GOOHAK_COMMIT: "815a31e487c5f76d1e9b28c0f982d4807459db7f"
+    image: local/kali-security:latest
+    container_name: kali-security
+    stdin_open: true
+    tty: true
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+    command: ["/bin/bash"]

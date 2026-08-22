@@ -1,0 +1,22 @@
+# Local runtime data and secrets
+.env
+*.log
+sessions/
+loot/
+reports/
+results/
+workspace/
+
+# Run artifacts (never commit recon output)
+runs/
+screenshots/
+
+# Vendored Pi agent runtime and local agent config
+.runtime/
+.pi/
+
+# Python build/test caches
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/

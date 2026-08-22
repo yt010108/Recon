@@ -1,0 +1,42 @@
+[scope]
+name = "Local OWASP Juice Shop"
+kind = "local-lab"
+authorization_reference = "Local intentionally vulnerable container owned by the operator"
+
+[worker]
+image = "local/hermes-recon-web:0.1"
+network = "recon-lab"
+
+[targets]
+base_url = "http://recon-juice-shop:3000"
+domains = ["recon-juice-shop"]
+cidrs = []
+base_urls = ["http://recon-juice-shop:3000/"]
+excluded_hosts = []
+excluded_paths = []
+allowed_ports = [3000]
+
+[limits]
+rate_limit = 10
+concurrency = 5
+timeout_seconds = 10
+
+[permissions]
+allow_passive_collection = true
+allow_http_probing = true
+allow_crawling = true
+allow_content_discovery = true
+allow_dns_bruteforce = false
+
+[tools]
+enabled = ["httpx", "robots_txt", "katana", "source_comments", "gobuster_dir", "parameth"]
+crawl_depth = 2
+robots_max_bytes = 262144
+comment_max_files = 100
+comment_max_bytes = 1048576
+comment_max_per_file = 100
+gobuster_wordlist = "/opt/recon-wordlists/web-common.txt"
+parameth_wordlist = "/opt/recon-wordlists/params-small.txt"
+parameter_url = "http://recon-juice-shop:3000/rest/products/search?q=apple"
+parameth_delay = 1
+parameth_threads = 3

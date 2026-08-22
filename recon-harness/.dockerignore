@@ -1,0 +1,10 @@
+.git
+.runtime
+__pycache__
+*.pyc
+runs
+screenshots
+tests
+static
+.pi
+lab

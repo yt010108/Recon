@@ -1,0 +1,14 @@
+services:
+  juice-shop:
+    image: bkimminich/juice-shop:v20.0.0
+    container_name: recon-juice-shop
+    restart: "no"
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - recon-lab
+
+networks:
+  recon-lab:
+    name: recon-lab
+

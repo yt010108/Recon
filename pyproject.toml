@@ -1,0 +1,18 @@
+[project]
+name = "recon-harness"
+version = "0.1.0"
+description = "Policy-gated bug bounty recon with an ephemeral container per tool command"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+recon-harness = "recon_harness.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "code"}
+
+[tool.setuptools.packages.find]
+where = ["code"]
+
+[tool.unittest]
+start-directory = "tests"

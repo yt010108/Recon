@@ -9,11 +9,9 @@ workspace/
 
 # Run artifacts (never commit recon output)
 runs/
-screenshots/
 
-# Vendored Pi agent runtime and local agent config
+# Local Pi/runtime state
 .runtime/
-.pi/
 
 # Python build/test caches
 __pycache__/

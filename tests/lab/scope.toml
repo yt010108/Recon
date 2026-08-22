@@ -1,0 +1,5 @@
+[scope]
+domain = "recon-juice-shop"
+dos_allowed = true
+base_url = "http://recon-juice-shop:3000"
+network = "recon-lab"

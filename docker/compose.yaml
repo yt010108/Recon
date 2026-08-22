@@ -1,19 +1,30 @@
 services:
-  kali-security:
+  recon-web:
     build:
       context: ..
       dockerfile: docker/Dockerfile
       args:
-        KALI_TOOLS: "gobuster subfinder httpx-toolkit"
         WAYBACKURLS_VERSION: "v0.1.0"
         KATANA_VERSION: "v1.7.0"
         PARAMETH_COMMIT: "8da6f27c071f00bc0bd26a565de474e7ab5baa42"
-        GOOHAK_COMMIT: "815a31e487c5f76d1e9b28c0f982d4807459db7f"
-    image: local/kali-security:latest
-    container_name: kali-security
+    image: local/hermes-recon-web:0.1
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 2g
+    cpus: 2
+    shm_size: 512m
+    tmpfs:
+      # HTTPX/Rod executes its short-lived leakless launcher from the temp dir.
+      - /tmp:rw,exec,size=512m,mode=1777
+      # Chromium needs a writable, disposable profile while the rootfs stays read-only.
+      - /home/recon:rw,size=128m,mode=1777
+    volumes:
+      - ../runs:/runs
+    working_dir: /work
+    command: ["/bin/bash"]
     stdin_open: true
     tty: true
-    working_dir: /workspace
-    volumes:
-      - ..:/workspace
-    command: ["/bin/bash"]

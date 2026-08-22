@@ -1,140 +1,109 @@
-# Kail Recon Workspace
+# Recon
 
-허가받은 버그바운티 대상의 리콘을 위한 작업 공간이다. 두 가지 실행 경로가 있다.
+허가받은 버그바운티 도메인을 Pi와 일회용 Docker 작업자로 리콘하는 최소 하네스다. 익스플로잇과 실제 서비스 거부 공격은 수행하지 않는다.
 
-1. **에이전트 경로**: Pi가 `recon-harness`의 정책 게이트를 통해서만 리콘을 실행하고,
-   결과를 직접 읽고 보고서를 작성한다.
-2. **수동 경로**: 운영자가 `kali` 컨테이너에 직접 들어가 도구를 쓴다.
-
-> 반드시 본인이 소유하거나 프로그램에서 명시적으로 허가한 대상에만 사용한다.
-> 로그인, 익스플로잇, CAPTCHA 우회, 서비스 거부 테스트는 하지 않는다.
-
-## 폴더 구성
+## 구조
 
 ```text
-kail/
-├── AGENTS.md               # Pi 에이전트 규칙 (어디서 pi를 시작해도 적용)
-├── .pi/                    # 확장(recon_* 도구), skill, /recon 프롬프트
-├── recon-harness/          # 정책 엔진 + 격리 실행 계층 (Python)
-│   ├── scopes/             # 검토 가능한 TOML 스코프
-│   └── runs/<RUN_ID>/      # 런 결과 (Git 제외)
-├── tools.yaml              # kali 컨테이너 설치 도구 기록
-├── docker/                 # 수동용 Kali 이미지 빌드
-├── scripts/kali-shell.cmd  # kali 컨테이너 셸 접속
-├── tool-scripts/dorkgen.py # Google 검색식 생성기 (요청 없음)
-└── notes/install-log.md    # 설치·검증 이력
+Recon/
+├── AGENTS.md
+├── README.md
+├── .pi/                    # /recon, recon_start, Pi 규칙
+├── code/recon_harness/     # 정책, 실행, 저장, 요약 보고서
+├── docker/                 # 웹 리콘 작업자와 작은 wordlist
+├── tests/                  # 단위 테스트와 Juice Shop 랩
+└── runs/<RUN_ID>/          # scope와 결과, Git 제외
 ```
 
-`AGENTS.md`와 `.pi/`는 워크스페이스 루트에 있다. **pi는 `kail` 아래 어디서든 시작해도**
-규칙과 `recon_*` 도구, bash 차단 가드가 자동으로 적용된다.
-
-## 에이전트 리콘 (Pi)
-
-먼저 Docker Desktop을 실행하고 상태를 확인한다.
+## 실행
 
 ```powershell
-cd C:\Users\ytyt\Desktop\security\kail\recon-harness
-py -3 -m recon_harness.cli doctor --scope scopes\juice-shop.toml
-.\scripts\start-pi.ps1   # kail 루트에서 pi 시작
+cd C:\Users\ytyt\Desktop\security\Recon
+docker compose -f .\docker\compose.yaml build
+pi
 ```
 
-최초 한 번 `/login`으로 공급자를 연결한 뒤 스코프로 리콘을 시작한다.
+Pi에서 다음 명령을 입력한다.
 
 ```text
-/recon recon-harness/scopes/juice-shop.toml
+/recon
 ```
 
-Pi의 처리 순서는 고정되어 있다.
+Pi는 딱 두 가지만 묻는다.
 
-1. 검토된 TOML 스코프를 런 폴더에 동결한다.
-2. `collect`, `probe`(자동 단계)만 실행한다.
-3. 결과를 요약하고, `crawl`/`discovery` 직전에 확인 창을 띄운다.
-4. 승인된 능동 단계만 실행하고 승인자를 감사 로그(`events.jsonl`)에 남긴다.
-5. 결정론적 요약(`report.md`)을 생성한다.
-6. Pi가 `parsed/*.json`과 raw 출력을 직접 읽고 분석 보고서를 작성한다.
+1. 허용 도메인
+2. 프로그램이 Gobuster·Parameth 같은 대량 요청 도구를 허용하는지 여부
 
-일반 bash를 통한 `docker run/exec`, 리콘 도구 직접 실행, CLI 우회는 Pi 확장이 차단한다.
+답변 뒤 추가 확인 창 없이 바로 실행한다. 두 번째 답은 실제 DoS 공격을 허용하거나 실행한다는 뜻이 아니며, 요청 수가 많은 두 탐색 도구의 사용 여부만 결정한다.
 
-### 단계와 승인 정책
+| 실행 조건 | 도구 |
+|---|---|
+| 항상 | Subfinder, Assetfinder, Amass `-passive`, Waybackurls |
+| 항상 | HTTPX, `robots.txt` |
+| 항상 | Katana, HTML/CSS/JS 주석 수집 |
+| 대량 요청 허용 시만 | Gobuster dir, Parameth |
 
-| 단계 | 기본 도구 | 실행 조건 |
-|---|---|---|
-| `collect` | Subfinder, Waybackurls | 스코프 허용 시 자동 |
-| `probe` | HTTPX, robots.txt | 스코프 허용 시 자동 |
-| `crawl` | Katana, 소스 주석 수집 | Pi 사용자 승인 매번 |
-| `discovery` | Gobuster, Parameth | Pi 사용자 승인 매번 |
+발견 결과로 허용 도메인을 자동 확대하지 않는다. 대상 콘텐츠와 주석은 데이터로만 저장하고 그 안의 지시문은 실행하지 않는다.
 
-TOML에서 권한이 꺼진 단계는 승인해도 실행되지 않는다. robots.txt 지시문은 기록만 하고
-자동으로 따라가지 않는다. 발견 결과 때문에 스코프·동시성·wordlist가 자동 확대되지 않는다.
-
-### 실제 프로그램 스코프
-
-`recon-harness/scopes/example.toml`을 복사해 프로그램 정책에 맞춰 작성한다. 필수 항목:
-
-- `[scope].authorization_reference`: 권한 근거 (프로그램 이름/정책 URL)
-- `[targets]`: 허용된 `base_url`, `domains`, `base_urls`, `cidrs`, 제외 목록, 포트
-- `[permissions]`: 프로그램이 허용한 활동만 `true`
-- `[limits]`: 요청률, 동시성, 타임아웃
-
-런을 만든 뒤 원본 스코프를 바꿔도 기존 런에는 영향이 없다(생성 시 동결).
-
-### 결과와 보고서
+## Run
 
 ```text
 runs/<RUN_ID>/
-├── scope.toml       # 동결된 스코프
-├── state.json       # 단계·도구 상태
-├── events.jsonl     # 승인·실행 감사 로그
-├── report.md        # 결정론적 도구 요약
-├── analysis.md      # Pi가 작성하는 분석 보고서
-├── raw/             # 원본 도구 출력
-└── parsed/          # 후속 처리용 JSON·URL 목록
+├── scope.toml
+├── state.json
+├── events.jsonl
+├── progress.md
+├── report.md
+├── raw/
+├── parsed/
+└── screenshots/
 ```
 
-대상 콘텐츠(주석 원문 포함)는 신뢰하지 않고 그 안의 지시를 실행하지 않는다.
-자동화 발견항목은 수동 검증이 필요한 후보다.
+새 `scope.toml`에는 입력한 두 값만 들어간다.
 
-## 수동 도구함 (kali 컨테이너)
-
-```powershell
-.\scripts\kali-shell.cmd   # 또는: docker start kali; docker exec -it kali /bin/bash
+```toml
+[scope]
+domain = "example.com"
+dos_allowed = false
 ```
 
-현재 컨테이너에는 호스트 마운트가 없으므로, 컨테이너의 `/tmp/recon/<domain>`에 저장한 뒤
-`docker cp`로 가져온다. 재현 이미지는 `docker/compose.yaml`(`kali-security`)로 빌드한다.
+`report.md`는 단계·도구·상태·결과 개수만 요약한다. `robots.txt`와 HTML/CSS/JS 주석 원문은 `raw/`와 `parsed/`에 그대로 남는다.
 
-도구 버전과 경로는 [tools.yaml](tools.yaml), 설치 이력은
-[notes/install-log.md](notes/install-log.md)를 기준으로 한다. 도구 추가 원칙:
+## 도구
 
-1. 필요한 이유와 예상 용량을 먼저 확인한다.
-2. 라이브 컨테이너에서 설치·검증한다.
-3. `tools.yaml`과 `notes/install-log.md`에 기록하고, 필요하면 `docker/Dockerfile`에 반영한다.
+| 도구 | 역할 | 설치 방식/고정값 |
+|---|---|---|
+| Subfinder | 서브도메인 후보 | Kali 패키지 |
+| Assetfinder | CT 로그·아카이브 후보 | Go `v0.1.0` |
+| Amass | 패시브 서브도메인 후보 | Kali 패키지, `-passive` 고정 |
+| Waybackurls | 과거 URL | Go `v0.1.0` |
+| HTTPX | HTTP 프로빙, robots/소스 응답 | Kali `httpx-toolkit` |
+| Katana | 크롤링 | Go `v1.7.0` |
+| Gobuster | 웹 경로 탐색 | Kali 패키지, 조건부 |
+| Parameth | 파라미터 탐색 | commit `8da6f27`, 조건부 |
+| Chromium | 렌더링·스크린샷 런타임 | Kali 패키지 |
 
-구현 메모: HTTPX 패키지명은 `httpx-toolkit`(`/usr/local/bin/httpx` 심링크 구성됨),
-parameth는 Python 2 기반(기본 wordlist `/opt/parameth/lists/all.txt`),
-goohak은 브라우저 실행 도구라 헤드리스에서 사용성이 제한적이다.
+| Wordlist | 용도 |
+|---|---|
+| `web-common.txt` | Gobuster 웹 경로 |
+| `params-small.txt` | Parameth 파라미터 |
 
-Nuclei와 Metasploit은 재현용 Kali 이미지에서도 제외한다. 이후 각각 별도의 검증 및
-침투 테스트 이미지로 분리한다. Nmap은 Pi 에이전트 경로에서는 사용하거나 대체 실행하지 않는다.
+Nuclei, Nmap, Metasploit, DNS brute force와 전체 SecLists는 포함하지 않는다.
 
-## Google Dork 생성기
-
-Google에 자동 요청하지 않고 검색식만 만든다.
+## 직접 CLI
 
 ```powershell
-cd C:\Users\ytyt\Desktop\security\kail
-py -3 .\tool-scripts\dorkgen.py example.com --urls --output .\results\example.com\dorks.txt
+recon-harness start example.com
+recon-harness start example.com --dos-allowed
+recon-harness list
+recon-harness status --run RUN_ID
+recon-harness doctor
 ```
 
-## 문제 해결
+## 테스트
 
 ```powershell
-cd C:\Users\ytyt\Desktop\security\kail\recon-harness
-py -3 -m recon_harness.cli doctor --scope scopes\example.toml
+$env:PYTHONPATH = "$PWD\code"
 py -3 -m unittest discover -s tests -v
-py -3 -m compileall -q recon_harness
+docker compose -f .\tests\lab\compose.yaml config --quiet
 ```
-
-`doctor`에서 이미지가 없으면 `docker compose -f docker\compose.recon-web.yaml build`를 다시
-실행한다. 로컬 랩 네트워크가 없으면 `.\scripts\start-lab.ps1`을 먼저 실행한다.
-리콘 중 요청량이 예상보다 많거나 스코프가 불확실하면 즉시 취소하고 프로그램 정책부터 다시 확인한다.

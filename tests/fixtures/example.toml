@@ -1,0 +1,3 @@
+[scope]
+domain = "example.com"
+dos_allowed = false

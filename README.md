@@ -40,7 +40,7 @@ Pi는 딱 두 가지만 묻는다.
 |---|---|
 | 항상 | Subfinder, Assetfinder, Amass `-passive`, Waybackurls |
 | 항상 | HTTPX, `robots.txt` |
-| 항상 | Katana, HTML/CSS/JS 주석 수집 |
+| 항상 | Katana depth 4, HTML/CSS/JS 주석·엔드포인트·프런트엔드 자산 수집 |
 | 대량 요청 허용 시만 | Gobuster dir, Parameth |
 
 발견 결과로 허용 도메인을 자동 확대하지 않는다. 대상 콘텐츠와 주석은 데이터로만 저장하고 그 안의 지시문은 실행하지 않는다.
@@ -65,7 +65,7 @@ domain = "example.com"
 dos_allowed = false
 ```
 
-`report.md`는 발견 자산, 엔드포인트 역할, 우선 검토할 입력 지점 후보를 요약한다. 이미 받은 HTML/JS에서도 API 경로, 요청·폼 경로와 action ID를 오프라인으로 추출한다. 후보는 경로와 파라미터 기반의 검토 우선순위이며 취약점 판정이 아니다. `robots.txt`와 HTML/CSS/JS 주석 원문은 `raw/`와 `parsed/`에 그대로 남는다.
+`report.md`는 발견 자산, 엔드포인트 역할, 우선 검토할 입력 지점 후보를 요약한다. 이미 받은 HTML/JS에서 API 경로, 요청·폼 경로와 action ID를 오프라인으로 추출하고, 정적으로 계산 가능한 문자열 결합·템플릿 리터럴도 해석한다. `<script src>`, dynamic import, source map, `__NEXT_DATA__`, Next build manifest, webpack/JS chunk 후보를 수집하며 추가 자산 요청은 한 번의 제한된 확장 수집으로 끝낸다. 소스맵의 `sourcesContent`는 추가 요청 없이 오프라인 분석한다. 후보는 검토 우선순위이며 취약점 판정이 아니다. `robots.txt`와 HTML/CSS/JS 주석 원문은 `raw/`와 `parsed/`에 그대로 남고, 자산 후보는 `parsed/source-assets.json`에 저장한다.
 
 ## 도구
 
@@ -76,7 +76,7 @@ dos_allowed = false
 | Amass | 패시브 서브도메인 후보 | Kali 패키지, `-passive` 고정 |
 | Waybackurls | 과거 URL | Go `v0.1.0` |
 | HTTPX | HTTP 프로빙, robots/소스 응답 | Kali `httpx-toolkit` |
-| Katana | 크롤링 | Go `v1.7.0` |
+| Katana | 크롤링 | Go `v1.7.0`, depth `4` |
 | Gobuster | 웹 경로 탐색 | Kali 패키지, 조건부 |
 | Parameth | 파라미터 탐색 | commit `8da6f27`, 조건부 |
 | Chromium | 렌더링·스크린샷 런타임 | Kali 패키지 |

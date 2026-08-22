@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from .deep_discovery import DeepDiscoveryToolRunner
 from .docker_backend import DockerBackend
 from .models import STAGE_ORDER, STAGE_PERMISSIONS, tools_for_stage, validate_stage
 from .policy import PolicyError, ScopePolicy
 from .storage import RunStore, utc_now
-from .tools import ToolRunner
 
 
 class HarnessRunner:
@@ -43,7 +43,7 @@ class HarnessRunner:
             run_id=run_id,
         )
         backend.require_ready()
-        tool_runner = ToolRunner(backend, self.store)
+        tool_runner = DeepDiscoveryToolRunner(backend, self.store)
         stage_state.update(
             {
                 "status": "running",

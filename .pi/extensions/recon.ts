@@ -67,7 +67,7 @@ export default function (pi: ExtensionAPI) {
     if (event.toolName !== "bash") return undefined;
     const input = event.input as { command?: unknown };
     const command = typeof input.command === "string" ? input.command : "";
-    const directRecon = /(?:^|\s)(?:docker\s+(?:container\s+)?(?:exec|run)|subfinder|assetfinder|amass|httpx|waybackurls|katana|gobuster|parameth)(?:\s|$)|recon_harness\.cli\s+(?:start|create|stage|tool)/i;
+    const directRecon = /(?:^|\s)(?:docker\s+(?:container\s+)?(?:exec|run)|subfinder|assetfinder|amass|httpx|waybackurls|katana|gobuster|parameth|nuclei)(?:\s|$)|recon_harness\.cli\s+(?:start|create|stage|tool)/i;
     if (directRecon.test(command)) {
       return { block: true, reason: "리콘은 recon_* 전용 도구를 통해 실행합니다." };
     }
@@ -99,7 +99,7 @@ export default function (pi: ExtensionAPI) {
         Type.Literal("collect"), Type.Literal("probe"), Type.Literal("crawl"), Type.Literal("discovery"),
         Type.Literal("dorkgen"), Type.Literal("subfinder"), Type.Literal("assetfinder"), Type.Literal("amass_enum"), Type.Literal("waybackurls"),
         Type.Literal("httpx"), Type.Literal("robots_txt"), Type.Literal("katana"), Type.Literal("source_comments"),
-        Type.Literal("gobuster_dir"), Type.Literal("parameth"),
+        Type.Literal("nuclei"), Type.Literal("gobuster_dir"), Type.Literal("parameth"),
       ]),
     }),
     async execute(_toolCallId, params, signal) {
@@ -122,7 +122,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "recon_start",
     label: "Recon: 시작",
-    description: "Run complete recon for one allowed domain. Katana always runs. Gobuster and Parameth run only when dos_allowed is true.",
+    description: "Run complete recon for one allowed domain. Katana and policy-limited Nuclei always run. Gobuster and Parameth run only when dos_allowed is true.",
     parameters: Type.Object({
       domain: Type.String({ description: "The single allowed domain" }),
       dos_allowed: Type.Boolean({ description: "Whether the program explicitly allows high-volume Gobuster and Parameth requests" }),

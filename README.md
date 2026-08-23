@@ -39,7 +39,7 @@ Pi는 딱 두 가지만 묻는다.
 | 실행 조건 | 도구 |
 |---|---|
 | 항상 | Dorkgen(검색식만 생성), Subfinder, Assetfinder, Amass `-passive`, Waybackurls |
-| 항상 | HTTPX, `robots.txt` |
+| 항상 | HTTPX, `robots.txt`, Nuclei(공식 서명 HTTP 템플릿, 정책 제한) |
 | 항상 | Katana depth 4, HTML/CSS/JS 주석·엔드포인트·프런트엔드 자산 수집 |
 | 대량 요청 허용 시만 | Gobuster dir, Parameth |
 
@@ -65,7 +65,7 @@ domain = "example.com"
 dos_allowed = false
 ```
 
-`report.md`는 발견 자산, 엔드포인트 역할, 우선 검토할 입력 지점 후보를 요약한다. 이미 받은 HTML/JS에서 API 경로, 요청·폼 경로와 action ID를 오프라인으로 추출하고, 정적으로 계산 가능한 문자열 결합·템플릿 리터럴도 해석한다. `<script src>`, dynamic import, source map, `__NEXT_DATA__`, Next build manifest, webpack/JS chunk 후보를 수집하며 추가 자산 요청은 한 번의 제한된 확장 수집으로 끝낸다. 소스맵의 `sourcesContent`는 추가 요청 없이 오프라인 분석한다. 후보는 검토 우선순위이며 취약점 판정이 아니다. `robots.txt`와 HTML/CSS/JS 주석 원문은 `raw/`와 `parsed/`에 그대로 남고, 자산 후보는 `parsed/source-assets.json`에 저장한다.
+`report.md`는 발견 자산, 엔드포인트 역할, 우선 검토할 입력 지점 후보와 근거가 있는 Nuclei 발견 후보를 요약한다. 이미 받은 HTML/JS에서 API 경로, 요청·폼 경로와 action ID를 오프라인으로 추출하고, 정적으로 계산 가능한 문자열 결합·템플릿 리터럴도 해석한다. `<script src>`, dynamic import, source map, `__NEXT_DATA__`, Next build manifest, webpack/JS chunk 후보를 수집하며 추가 자산 요청은 한 번의 제한된 확장 수집으로 끝낸다. 소스맵의 `sourcesContent`는 추가 요청 없이 오프라인 분석한다. 후보는 검토 우선순위이며 취약점 판정이 아니다. `robots.txt`와 HTML/CSS/JS 주석 원문은 `raw/`와 `parsed/`에 그대로 남고, 자산 후보는 `parsed/source-assets.json`, Nuclei 정리 결과는 `parsed/nuclei-findings.json`에 저장한다.
 
 ## 도구
 
@@ -77,6 +77,7 @@ dos_allowed = false
 | Amass | 패시브 서브도메인 후보 | Kali 패키지, `-passive` 고정 |
 | Waybackurls | 과거 URL | Go `v0.1.0` |
 | HTTPX | HTTP 프로빙, robots/소스 응답 | Kali `httpx-toolkit` |
+| Nuclei | 근거가 있는 발견 후보 | 전용 이미지 `v3.11.1`, 공식 템플릿 `v10.4.7` |
 | Katana | 크롤링 | Go `v1.7.0`, depth `4` |
 | Gobuster | 웹 경로 탐색 | Kali 패키지, 조건부 |
 | Parameth | 파라미터 탐색 | commit `8da6f27`, 조건부 |
@@ -87,7 +88,7 @@ dos_allowed = false
 | `web-common.txt` | Gobuster 웹 경로 |
 | `params-small.txt` | Parameth 파라미터 |
 
-Nuclei, Nmap, Metasploit, DNS brute force와 전체 SecLists는 포함하지 않는다.
+Nmap, Metasploit, DNS brute force와 전체 SecLists는 포함하지 않는다. Nuclei는 별도 `docker/Dockerfile.nuclei` 이미지에서만 실행하며 공식 서명 HTTP 템플릿의 `tech`·`exposure`·`misconfig` 태그로 제한한다. 리다이렉트, OAST, DAST/퍼징, 코드·헤드리스 템플릿과 `dos`·`fuzz`·`intrusive` 태그는 비활성화한다.
 
 ## 직접 CLI
 
@@ -103,6 +104,7 @@ recon-harness stage --run RUN_ID crawl
 recon-harness tool --run RUN_ID subfinder
 recon-harness tool --run RUN_ID dorkgen
 recon-harness tool --run RUN_ID httpx
+recon-harness tool --run RUN_ID nuclei
 recon-harness report --run RUN_ID
 
 recon-harness list

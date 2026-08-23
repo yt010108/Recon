@@ -18,9 +18,11 @@ class ScopePolicyTests(unittest.TestCase):
     def test_example_scope_allows_root_and_subdomain(self) -> None:
         policy = ScopePolicy.load(EXAMPLE_SCOPE)
         self.assertEqual(policy.worker_image, "local/hermes-recon-web:0.1")
+        self.assertEqual(policy.nuclei_image, "local/hermes-recon-nuclei:0.1")
         self.assertTrue(policy.is_tool_enabled("robots_txt"))
         self.assertTrue(policy.is_tool_enabled("source_comments"))
         self.assertTrue(policy.is_tool_enabled("dorkgen"))
+        self.assertTrue(policy.is_tool_enabled("nuclei"))
         self.assertIsNone(policy.docker_network)
         self.assertEqual(policy.validate_url("https://example.com/"), "https://example.com/")
         self.assertEqual(
@@ -50,6 +52,7 @@ class ScopePolicyTests(unittest.TestCase):
 
     def test_tool_maps_to_its_stage(self) -> None:
         self.assertEqual(stage_for_tool("httpx"), "probe")
+        self.assertEqual(stage_for_tool("nuclei"), "probe")
         self.assertEqual(stage_for_tool("source_comments"), "crawl")
 
     def test_pi_scope_contains_only_domain_and_dos_choice(self) -> None:

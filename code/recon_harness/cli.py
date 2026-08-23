@@ -11,7 +11,7 @@ from typing import Any, Sequence
 from urllib.parse import urlsplit
 
 from . import __version__
-from .docker_backend import DEFAULT_IMAGE, BackendError, DockerBackend
+from .docker_backend import DEFAULT_IMAGE, NUCLEI_IMAGE, BackendError, DockerBackend
 from .models import LOCAL_TOOLS, STAGE_ORDER, TOOL_NAMES
 from .policy import PolicyError, ScopePolicy
 from .reporting import build_report
@@ -131,6 +131,8 @@ def cmd_status(args: argparse.Namespace) -> int:
 def cmd_doctor(args: argparse.Namespace) -> int:
     backend = DockerBackend(args.image)
     status = backend.doctor()
+    nuclei_backend = DockerBackend(args.nuclei_image)
+    nuclei_status = nuclei_backend.doctor()
     tools: dict[str, dict[str, Any]] = {}
 
     if status["ready"]:
@@ -140,15 +142,29 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             "source_comments": "httpx",
             "amass_enum": "amass",
         }
-        for name in sorted({command_names.get(tool, tool) for tool in TOOL_NAMES - LOCAL_TOOLS}):
+        base_tools = TOOL_NAMES - LOCAL_TOOLS - {"nuclei"}
+        for name in sorted({command_names.get(tool, tool) for tool in base_tools}):
             result = backend.run(["which", name], process_timeout=20)
             tools[name] = {
                 "available": result.exit_code == 0,
                 "path": result.stdout.strip(),
             }
 
-    _emit({"backend": status, "tools": tools})
-    return 0 if status["ready"] and all(item["available"] for item in tools.values()) else 1
+    if nuclei_status["ready"]:
+        result = nuclei_backend.run(["which", "nuclei"], process_timeout=20)
+        tools["nuclei"] = {
+            "available": result.exit_code == 0,
+            "path": result.stdout.strip(),
+        }
+
+    ready = (
+        bool(status["ready"])
+        and bool(nuclei_status["ready"])
+        and all(item["available"] for item in tools.values())
+        and "nuclei" in tools
+    )
+    _emit({"backend": status, "nuclei_backend": nuclei_status, "tools": tools})
+    return 0 if ready else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -193,6 +209,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor = commands.add_parser("doctor", help="Check Docker and tools")
     doctor.add_argument("--image", default=DEFAULT_IMAGE)
+    doctor.add_argument("--nuclei-image", default=NUCLEI_IMAGE)
     doctor.set_defaults(handler=cmd_doctor)
     return parser
 

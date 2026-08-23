@@ -1,0 +1,40 @@
+# syntax=docker/dockerfile:1.7
+
+FROM kalilinux/kali-rolling:latest
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG TARGETARCH=amd64
+ARG NUCLEI_VERSION=3.11.1
+ARG NUCLEI_TEMPLATES_VERSION=10.4.7
+ARG NUCLEI_TEMPLATES_COMMIT=83234ce456da3e90dda86dfbc5e605e64a846df3
+
+LABEL org.opencontainers.image.title="Hermes Nuclei reconnaissance worker" \
+      org.opencontainers.image.description="Pinned Nuclei worker with pinned official templates"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates coreutils curl tini unzip \
+    && case "${TARGETARCH}" in amd64|arm64|386|arm) ;; *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; esac \
+    && archive="nuclei_${NUCLEI_VERSION}_linux_${TARGETARCH}.zip" \
+    && curl -fsSL "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/${archive}" -o "/tmp/${archive}" \
+    && curl -fsSL "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_checksums.txt" -o /tmp/nuclei-checksums.txt \
+    && grep " ${archive}$" /tmp/nuclei-checksums.txt | (cd /tmp && sha256sum -c -) \
+    && unzip -q "/tmp/${archive}" nuclei -d /usr/local/bin \
+    && template_archive="nuclei-templates-${NUCLEI_TEMPLATES_VERSION}.tar.gz" \
+    && curl -fsSL "https://codeload.github.com/projectdiscovery/nuclei-templates/tar.gz/${NUCLEI_TEMPLATES_COMMIT}" -o "/tmp/${template_archive}" \
+    && mkdir -p /opt/nuclei-templates \
+    && tar -xzf "/tmp/${template_archive}" --strip-components=1 -C /opt/nuclei-templates \
+    && chmod 0755 /usr/local/bin/nuclei \
+    && rm -rf /tmp/* /var/lib/apt/lists/* /var/cache/apt/* \
+    && useradd --create-home --uid 10001 --shell /bin/bash recon \
+    && mkdir -p /work \
+    && chown -R recon:recon /work
+
+ENV HOME=/home/recon \
+    DISABLE_NUCLEI_TEMPLATES_PUBLIC_DOWNLOAD=true \
+    DISABLE_NUCLEI_TEMPLATES_GITHUB_DOWNLOAD=true
+
+USER recon
+WORKDIR /work
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/bin/bash"]

@@ -69,6 +69,7 @@ def build_report(store: RunStore, state: dict[str, Any]):
     services = _json(run_dir / "parsed" / "httpx.json", [])
     source_endpoints = _json(run_dir / "parsed" / "source-endpoints.json", [])
     dorks = _lines(run_dir / "parsed" / "google-dorks.txt")
+    nuclei_findings = _json(run_dir / "parsed" / "nuclei-findings.json", [])
     urls = _urls(run_dir, base_url)
     endpoints = [(url, _matches(url, ROLE_HINTS)) for url in urls]
     endpoints = [(url, roles or ["일반 웹"]) for url, roles in endpoints if roles or urlsplit(url).query]
@@ -80,6 +81,7 @@ def build_report(store: RunStore, state: dict[str, Any]):
         f"- 호스트: `{len(_lines(run_dir / 'parsed' / 'hosts.txt'))}`",
         f"- 활성 서비스: `{len(services)}`",
         f"- 수집 URL: `{len(urls)}`",
+        f"- Nuclei 발견 후보: `{len(nuclei_findings)}`",
         f"- 검토할 입력 지점: `{len(sinks)}`", "",
         "## 자산", "", "| URL | 상태 | 제목 | 기술 |", "|---|---:|---|---|",
     ]
@@ -100,6 +102,38 @@ def build_report(store: RunStore, state: dict[str, Any]):
         lines.append(f"| {_cell(item.get('kind'))} | {_cell(item.get('endpoint') or item.get('value'))} | {_cell(item.get('source'))}:{_cell(item.get('line'))} |")
     if not source_endpoints:
         lines.append("| - | 발견된 후보 없음 | - |")
+
+    severity_order = {
+        "critical": 0,
+        "high": 1,
+        "medium": 2,
+        "low": 3,
+        "info": 4,
+        "unknown": 5,
+    }
+    nuclei_findings = sorted(
+        nuclei_findings,
+        key=lambda item: (
+            severity_order.get(str(item.get("severity", "unknown")).lower(), 5),
+            str(item.get("template_id", "")),
+            str(item.get("matched_at", "")),
+        ),
+    )
+    lines.extend([
+        "", "## Nuclei 발견 후보", "",
+        "공식 서명 HTTP 템플릿의 자동 탐지 결과이며 취약점 확정이 아니다.", "",
+        "| 심각도 | 템플릿 | 매처 | 이름 | 대상 | HTTP | 근거 |",
+        "|---|---|---|---|---|---:|---|",
+    ])
+    for item in nuclei_findings[:100]:
+        lines.append(
+            f"| {_cell(item.get('severity'))} | {_cell(item.get('template_id'))} | "
+            f"{_cell(item.get('matcher_name'))} | {_cell(item.get('name'))} | "
+            f"{_cell(item.get('matched_at'))} | "
+            f"{_cell(item.get('status_code'))} | `{_cell(item.get('evidence'))}` |"
+        )
+    if not nuclei_findings:
+        lines.append("| - | - | - | 근거가 확인된 발견 후보 없음 | - | - | - |")
 
     lines.extend(["", "## 우선 검토할 입력 지점", "", "경로명과 쿼리 파라미터에 따른 후보이며 취약점 판정이 아니다.", "", "| 후보 유형 | URL | 파라미터 |", "|---|---|---|"])
     for url, reasons in sinks[:50]:

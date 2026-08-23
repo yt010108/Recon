@@ -19,6 +19,19 @@ class HarnessRunner:
     def policy_for_run(self, state: dict[str, Any]) -> ScopePolicy:
         return ScopePolicy.load(self.store.run_dir(state["run_id"]) / "scope.toml")
 
+    def _backend_for_tool(
+        self, policy: ScopePolicy, run_id: str, tool: str
+    ) -> DockerBackend:
+        image = policy.nuclei_image if tool == "nuclei" else policy.worker_image
+        backend = DockerBackend(
+            image,
+            workspace_dir=self.store.run_dir(run_id),
+            network=policy.docker_network,
+            run_id=run_id,
+        )
+        backend.require_ready()
+        return backend
+
     def _run_stage(
         self, run_id: str, stage: str, *, require_previous: bool = True
     ) -> dict[str, Any]:
@@ -39,14 +52,6 @@ class HarnessRunner:
                     f"Previous stage {STAGE_ORDER[stage_index - 1]!r} is not complete"
                 )
 
-        backend = DockerBackend(
-            policy.worker_image,
-            workspace_dir=self.store.run_dir(run_id),
-            network=policy.docker_network,
-            run_id=run_id,
-        )
-        backend.require_ready()
-        tool_runner = DeepDiscoveryToolRunner(backend, self.store)
         stage_state.update(
             {
                 "status": "running",
@@ -69,7 +74,13 @@ class HarnessRunner:
             for tool in enabled:
                 if stage_state["tools"].get(tool, {}).get("status") == "completed":
                     continue
-                outcome = tool_runner.run(tool, policy, state)
+                outcome = (
+                    run_local_dorkgen(policy, state, self.store)
+                    if tool in LOCAL_TOOLS
+                    else DeepDiscoveryToolRunner(
+                        self._backend_for_tool(policy, run_id, tool), self.store
+                    ).run(tool, policy, state)
+                )
                 tool_status = "skipped" if outcome.skipped else (
                     "completed" if outcome.exit_code == 0 else "failed"
                 )
@@ -114,15 +125,11 @@ class HarnessRunner:
         if not policy.is_tool_enabled(tool):
             raise PolicyError(f"Tool {tool!r} is disabled by this run's scope")
 
-        backend = None
-        if tool not in LOCAL_TOOLS:
-            backend = DockerBackend(
-                policy.worker_image,
-                workspace_dir=self.store.run_dir(run_id),
-                network=policy.docker_network,
-                run_id=run_id,
-            )
-            backend.require_ready()
+        backend = (
+            None
+            if tool in LOCAL_TOOLS
+            else self._backend_for_tool(policy, run_id, tool)
+        )
         stage_state = state["stages"][stage]
         stage_state.update({"status": "running", "started_at": stage_state["started_at"] or utc_now(), "error": None})
         state["status"] = "running"

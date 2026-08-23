@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from .docker_backend import DEFAULT_IMAGE
+from .docker_backend import DEFAULT_IMAGE, NUCLEI_IMAGE
 from .models import STAGE_PERMISSIONS, TOOL_NAMES, validate_stage
 
 
@@ -30,6 +30,7 @@ class ScopePolicy:
     base_url: str
     docker_network: str | None = None
     worker_image: str = DEFAULT_IMAGE
+    nuclei_image: str = NUCLEI_IMAGE
     rate_limit: int = 5
     concurrency: int = 2
     timeout_seconds: int = 10
@@ -124,6 +125,7 @@ class ScopePolicy:
             "domains": self.domains,
             "allowed_ports": self.allowed_ports,
             "worker_image": self.worker_image,
+            "nuclei_image": self.nuclei_image,
             "docker_network": self.docker_network,
             "rate_limit": self.rate_limit,
             "concurrency": self.concurrency,

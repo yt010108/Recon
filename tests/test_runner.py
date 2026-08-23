@@ -90,6 +90,18 @@ class RunnerSelectionTests(unittest.TestCase):
         backend.assert_not_called()
         self.assertEqual(result["stages"]["collect"]["tools"]["dorkgen"]["status"], "completed")
 
+    def test_nuclei_individual_run_uses_dedicated_image(self) -> None:
+        store, state = self._created_run()
+        runner = HarnessRunner(store)
+        with (
+            patch("recon_harness.runner.DockerBackend") as backend,
+            patch("recon_harness.runner.DeepDiscoveryToolRunner") as tools,
+        ):
+            backend.return_value.require_ready.return_value = None
+            tools.return_value.run.return_value = ToolOutcome(0, "one finding", 1)
+            runner.run_tool(state["run_id"], "nuclei")
+        self.assertEqual(backend.call_args.args[0], "local/hermes-recon-nuclei:0.1")
+
 
 if __name__ == "__main__":
     unittest.main()

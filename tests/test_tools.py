@@ -240,6 +240,50 @@ class AdapterTests(unittest.TestCase):
         )
         self.assertEqual(outcome.item_count, 2)
 
+    def test_nuclei_uses_fixed_policy_and_keeps_only_evidence_backed_scope_results(self) -> None:
+        run_dir = self.store.run_dir(self.state["run_id"])
+        (run_dir / "parsed" / "alive-urls.txt").write_text(
+            "http://recon-juice-shop:3000/\nhttp://outside.test/\n",
+            encoding="utf-8",
+        )
+        in_scope = {
+            "template-id": "test-header",
+            "info": {"name": "Test Header", "severity": "low"},
+            "type": "http",
+            "matched-at": "http://recon-juice-shop:3000/",
+            "matcher-name": "header",
+            "request": "GET / HTTP/1.1\r\nHost: recon-juice-shop:3000\r\n\r\n",
+            "response": "HTTP/1.1 200 OK\r\nX-Test: yes\r\n\r\nbody",
+        }
+        out_of_scope = dict(in_scope, **{"matched-at": "http://outside.test/"})
+        no_evidence = dict(in_scope)
+        no_evidence.pop("response")
+        backend = FakeBackend(
+            CommandResult(
+                0,
+                "\n".join(json.dumps(item) for item in (in_scope, out_of_scope, no_evidence)) + "\n",
+                "",
+            )
+        )
+
+        outcome = ToolRunner(backend, self.store).run_nuclei(self.policy, self.state)
+
+        command = backend.commands[0]
+        self.assertIn("-disable-unsigned-templates", command)
+        self.assertIn("-disable-redirects", command)
+        self.assertIn("-no-interactsh", command)
+        tags_index = command.index("-tags") + 1
+        self.assertEqual(command[tags_index], "tech,exposure,misconfig")
+        self.assertNotIn("-dast", command)
+        self.assertNotIn("-headless", command)
+        findings = json.loads(
+            (run_dir / "parsed" / "nuclei-findings.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["status_code"], 200)
+        self.assertEqual(findings[0]["evidence"], "raw/nuclei.jsonl:1")
+        self.assertEqual(outcome.item_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

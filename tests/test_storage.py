@@ -56,6 +56,21 @@ class RunStoreTests(unittest.TestCase):
             (store.run_dir(state["run_id"]) / "parsed" / "google-dorks.txt").write_text(
                 "site:recon-juice-shop\n", encoding="utf-8"
             )
+            (store.run_dir(state["run_id"]) / "parsed" / "nuclei-findings.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "template_id": "test-header",
+                            "name": "Test Header",
+                            "severity": "low",
+                            "matched_at": "http://recon-juice-shop:3000/",
+                            "status_code": 200,
+                            "evidence": "raw/nuclei.jsonl:1",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
             report = build_report(store, state)
             self.assertTrue(report.is_file())
             loaded = store.load(state["run_id"])
@@ -66,6 +81,9 @@ class RunStoreTests(unittest.TestCase):
             self.assertIn("## 우선 검토할 입력 지점", text)
             self.assertIn("조회·식별자 입력", text)
             self.assertIn("## Google Dorks", text)
+            self.assertIn("## Nuclei 발견 후보", text)
+            self.assertIn("test-header", text)
+            self.assertIn("raw/nuclei.jsonl:1", text)
             self.assertNotIn("SAMPLE-ORIGINAL-VALUE", text)
 
     def test_invalid_run_id_is_rejected(self) -> None:

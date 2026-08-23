@@ -13,6 +13,7 @@ from typing import Sequence
 
 
 DEFAULT_IMAGE = "local/hermes-recon-web:0.1"
+NUCLEI_IMAGE = "local/hermes-recon-nuclei:0.1"
 REMOTE_INPUT_DIR = "/work/run/.worker-inputs"
 
 

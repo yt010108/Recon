@@ -12,7 +12,7 @@ STAGE_PERMISSIONS = {
 
 STAGE_TOOLS = {
     "collect": ("dorkgen", "subfinder", "assetfinder", "amass_enum", "waybackurls"),
-    "probe": ("httpx", "robots_txt"),
+    "probe": ("httpx", "robots_txt", "nuclei"),
     "crawl": ("katana", "source_comments"),
     "discovery": ("gobuster_dir", "parameth"),
 }

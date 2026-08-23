@@ -570,6 +570,98 @@ class ToolRunner:
             error=result.stderr.strip(),
         )
 
+    def run_nuclei(self, policy: ScopePolicy, state: dict[str, Any]) -> ToolOutcome:
+        """고정된 공식 HTTP 템플릿으로 스코프 안의 활성 URL만 검사한다."""
+        targets: list[str] = []
+        for value in self._live_urls(policy, state):
+            try:
+                policy.validate_url(value)
+            except PolicyError:
+                continue
+            if value not in targets:
+                targets.append(value)
+        if not targets:
+            return ToolOutcome(0, "Nuclei skipped because no in-scope URL exists", skipped=True)
+
+        remote = self._copy_lines_input(state, "nuclei-input.txt", targets)
+        result = self.backend.run(
+            [
+                "nuclei",
+                "-list", remote,
+                "-templates", "/opt/nuclei-templates",
+                "-type", "http",
+                "-disable-unsigned-templates",
+                "-disable-redirects",
+                "-no-interactsh",
+                "-tags", "tech,exposure,misconfig",
+                "-exclude-tags", "dos,fuzz,intrusive",
+                "-jsonl",
+                "-silent",
+                "-no-color",
+                "-omit-template",
+                "-rate-limit", str(policy.rate_limit),
+                "-concurrency", str(policy.concurrency),
+                "-bulk-size", str(policy.concurrency),
+                "-timeout", str(policy.timeout_seconds),
+                "-disable-update-check",
+            ],
+            process_timeout=1800,
+        )
+        self._write_result(state, "nuclei", result, extension="jsonl")
+
+        findings: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for line_number, line in enumerate(result.stdout.splitlines(), start=1):
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            matched_at = str(record.get("matched-at") or record.get("host") or "")
+            try:
+                policy.validate_url(matched_at)
+            except PolicyError:
+                continue
+
+            # 핀한 Nuclei 버전은 JSONL finding에 request/response를 기본 포함한다.
+            # 둘 중 하나라도 없으면 하네스의 근거 요건을 충족하지 못하므로 보고하지 않는다.
+            request = record.get("request")
+            response = record.get("response")
+            if not isinstance(request, str) or not isinstance(response, str):
+                continue
+            info = record.get("info") if isinstance(record.get("info"), dict) else {}
+            template_id = str(record.get("template-id") or "unknown")
+            matcher_name = str(record.get("matcher-name") or "")
+            key = (template_id, matched_at, matcher_name)
+            if key in seen:
+                continue
+            seen.add(key)
+            status_match = re.search(r"(?m)^HTTP/\S+\s+(\d{3})\b", response)
+            findings.append(
+                {
+                    "template_id": template_id,
+                    "name": str(info.get("name") or template_id),
+                    "severity": str(info.get("severity") or "unknown").lower(),
+                    "type": str(record.get("type") or "http"),
+                    "matched_at": matched_at,
+                    "matcher_name": matcher_name,
+                    "status_code": int(status_match.group(1)) if status_match else None,
+                    "timestamp": str(record.get("timestamp") or ""),
+                    "evidence": f"raw/nuclei.jsonl:{line_number}",
+                }
+            )
+
+        parsed = self.store.run_dir(state["run_id"]) / "parsed" / "nuclei-findings.json"
+        atomic_write_json(parsed, findings)
+        self.store.add_artifact(state, parsed, "findings", "nuclei")
+        return ToolOutcome(
+            result.exit_code,
+            f"Recorded {len(findings)} evidence-backed in-scope Nuclei findings",
+            len(findings),
+            error=result.stderr.strip(),
+        )
+
     def _live_urls(self, policy: ScopePolicy, state: dict[str, Any]) -> list[str]:
         path = self.store.run_dir(state["run_id"]) / "parsed" / "alive-urls.txt"
         urls = _unique_lines(path.read_text(encoding="utf-8")) if path.exists() else []

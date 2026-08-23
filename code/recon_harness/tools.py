@@ -197,7 +197,7 @@ def _extract_source_endpoints(source: str) -> list[dict[str, Any]]:
                     "kind": kind,
                     "value": value,
                     "line": source.count("\n", 0, match.start()) + 1,
-                    "context": context[:240],
+                    "context": context,
                 }
             )
     return findings
@@ -436,8 +436,7 @@ class ToolRunner:
         result = self.backend.run(
             [
                 "httpx", "-l", remote, "-silent", "-j", "-sc", "-title", "-td",
-                "-rl", str(policy.rate_limit), "-t", str(policy.concurrency),
-                "-timeout", str(policy.timeout_seconds), "-duc",
+                "-duc",
             ],
             process_timeout=600,
         )
@@ -491,13 +490,10 @@ class ToolRunner:
             )
 
         remote = self._copy_lines_input(state, "robots-input.txt", targets)
-        max_bytes = 262_144
         result = self.backend.run(
             [
                 "httpx", "-l", remote, "-silent", "-j", "-sc", "-ct", "-cl",
-                "-irr", "-rstr", str(max_bytes), "-rl", str(policy.rate_limit),
-                "-t", str(policy.concurrency), "-timeout", str(policy.timeout_seconds),
-                "-duc",
+                "-irr", "-duc",
             ],
             process_timeout=600,
         )
@@ -571,7 +567,7 @@ class ToolRunner:
         )
 
     def run_nuclei(self, policy: ScopePolicy, state: dict[str, Any]) -> ToolOutcome:
-        """고정된 공식 HTTP 템플릿으로 스코프 안의 활성 URL만 검사한다."""
+        """핀한 템플릿 전체로 활성 URL을 검사한다."""
         targets: list[str] = []
         for value in self._live_urls(policy, state):
             try:
@@ -589,23 +585,13 @@ class ToolRunner:
                 "nuclei",
                 "-list", remote,
                 "-templates", "/opt/nuclei-templates",
-                "-type", "http",
-                "-disable-unsigned-templates",
-                "-disable-redirects",
-                "-no-interactsh",
-                "-tags", "tech,exposure,misconfig",
-                "-exclude-tags", "dos,fuzz,intrusive",
                 "-jsonl",
                 "-silent",
                 "-no-color",
                 "-omit-template",
-                "-rate-limit", str(policy.rate_limit),
-                "-concurrency", str(policy.concurrency),
-                "-bulk-size", str(policy.concurrency),
-                "-timeout", str(policy.timeout_seconds),
                 "-disable-update-check",
             ],
-            process_timeout=1800,
+            process_timeout=21600,
         )
         self._write_result(state, "nuclei", result, extension="jsonl")
 
@@ -619,17 +605,7 @@ class ToolRunner:
             if not isinstance(record, dict):
                 continue
             matched_at = str(record.get("matched-at") or record.get("host") or "")
-            try:
-                policy.validate_url(matched_at)
-            except PolicyError:
-                continue
-
-            # 핀한 Nuclei 버전은 JSONL finding에 request/response를 기본 포함한다.
-            # 둘 중 하나라도 없으면 하네스의 근거 요건을 충족하지 못하므로 보고하지 않는다.
-            request = record.get("request")
             response = record.get("response")
-            if not isinstance(request, str) or not isinstance(response, str):
-                continue
             info = record.get("info") if isinstance(record.get("info"), dict) else {}
             template_id = str(record.get("template-id") or "unknown")
             matcher_name = str(record.get("matcher-name") or "")
@@ -637,7 +613,11 @@ class ToolRunner:
             if key in seen:
                 continue
             seen.add(key)
-            status_match = re.search(r"(?m)^HTTP/\S+\s+(\d{3})\b", response)
+            status_match = (
+                re.search(r"(?m)^HTTP/\S+\s+(\d{3})\b", response)
+                if isinstance(response, str)
+                else None
+            )
             findings.append(
                 {
                     "template_id": template_id,
@@ -657,7 +637,7 @@ class ToolRunner:
         self.store.add_artifact(state, parsed, "findings", "nuclei")
         return ToolOutcome(
             result.exit_code,
-            f"Recorded {len(findings)} evidence-backed in-scope Nuclei findings",
+            f"Recorded {len(findings)} Nuclei findings",
             len(findings),
             error=result.stderr.strip(),
         )
@@ -670,7 +650,7 @@ class ToolRunner:
     def run_katana(self, policy: ScopePolicy, state: dict[str, Any]) -> ToolOutcome:
         remote = self._copy_lines_input(state, "katana-input.txt", self._live_urls(policy, state))
         depth = 2
-        args = ["katana", "-list", remote, "-silent", "-d", str(depth), "-jc", "-rl", str(policy.rate_limit)]
+        args = ["katana", "-list", remote, "-silent", "-d", str(depth), "-jc"]
         for pattern in _katana_scope_regexes(policy):
             args.extend(["-cs", pattern])
         result = self.backend.run(
@@ -704,10 +684,6 @@ class ToolRunner:
         if katana_urls.exists():
             urls.extend(_unique_lines(katana_urls.read_text(encoding="utf-8")))
         candidates = _candidate_source_urls(policy, urls)
-        max_files = 100
-        max_bytes = 1_048_576
-        max_per_file = 100
-        candidates = candidates[:max_files]
         if not candidates:
             return ToolOutcome(
                 0,
@@ -719,9 +695,7 @@ class ToolRunner:
         result = self.backend.run(
             [
                 "httpx", "-l", remote, "-silent", "-j", "-sc", "-ct", "-cl",
-                "-irr", "-rstr", str(max_bytes), "-rl", str(policy.rate_limit),
-                "-t", str(policy.concurrency), "-timeout", str(policy.timeout_seconds),
-                "-duc",
+                "-irr", "-duc",
             ],
             process_timeout=900,
         )
@@ -759,7 +733,7 @@ class ToolRunner:
                     continue
                 seen_endpoints.add(key)
                 endpoints.append({"source": url, "endpoint": endpoint, **candidate})
-            for comment in comments[:max_per_file]:
+            for comment in comments:
                 text = str(comment["text"])
                 key = (url, int(comment["line"]), str(comment["syntax"]), text)
                 if key in seen:
@@ -793,7 +767,7 @@ class ToolRunner:
         wordlist = "/opt/recon-wordlists/web-common.txt"
         args = [
             "gobuster", "dir", "-u", policy.base_url, "-w", wordlist,
-            "-q", "-t", str(policy.concurrency), "--timeout", f"{policy.timeout_seconds}s",
+            "-q",
         ]
         result = self.backend.run(args, process_timeout=1200)
         # SPA가 모든 경로에 같은 200 본문을 반환하면 그 길이만 제외해 한 번 재시도한다.
@@ -827,10 +801,8 @@ class ToolRunner:
         target = policy.base_url
         policy.validate_url(target)
         wordlist = "/opt/recon-wordlists/params-small.txt"
-        delay = 1
-        threads = policy.concurrency
         result = self.backend.run(
-            ["parameth", "-u", target, "-p", wordlist, "-t", str(threads), "-T", str(delay)],
+            ["parameth", "-u", target, "-p", wordlist],
             process_timeout=1800,
         )
         self._write_result(state, "parameth", result)

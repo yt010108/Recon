@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from recon_harness.cli import render_scope_toml
-from recon_harness.models import STAGE_ORDER, stage_for_tool
+from recon_harness.models import STAGE_ORDER, stage_for_tool, tools_for_stage
 from recon_harness.policy import PolicyError, ScopePolicy
 
 
@@ -18,11 +18,6 @@ class ScopePolicyTests(unittest.TestCase):
     def test_example_scope_allows_root_and_subdomain(self) -> None:
         policy = ScopePolicy.load(EXAMPLE_SCOPE)
         self.assertEqual(policy.worker_image, "local/hermes-recon-web:0.1")
-        self.assertEqual(policy.nuclei_image, "local/hermes-recon-nuclei:0.1")
-        self.assertTrue(policy.is_tool_enabled("robots_txt"))
-        self.assertTrue(policy.is_tool_enabled("source_comments"))
-        self.assertTrue(policy.is_tool_enabled("dorkgen"))
-        self.assertTrue(policy.is_tool_enabled("nuclei"))
         self.assertIsNone(policy.docker_network)
         self.assertEqual(policy.validate_url("https://example.com/"), "https://example.com/")
         self.assertEqual(
@@ -35,10 +30,9 @@ class ScopePolicyTests(unittest.TestCase):
         with self.assertRaises(PolicyError):
             policy.validate_url("https://example.net/")
 
-    def test_stage_permission_is_enforced(self) -> None:
+    def test_every_recon_stage_is_available(self) -> None:
         policy = ScopePolicy.load(EXAMPLE_SCOPE)
-        with self.assertRaises(PolicyError):
-            policy.validate_stage("discovery")
+        self.assertEqual(policy.validate_stage("discovery"), "discovery")
         self.assertEqual(policy.validate_stage("crawl"), "crawl")
         juice = ScopePolicy.load(LAB_SCOPE)
         self.assertEqual(juice.docker_network, "recon-lab")
@@ -54,28 +48,16 @@ class ScopePolicyTests(unittest.TestCase):
         self.assertEqual(stage_for_tool("httpx"), "probe")
         self.assertEqual(stage_for_tool("nuclei"), "probe")
         self.assertEqual(stage_for_tool("source_comments"), "crawl")
+        self.assertNotIn("nuclei", tools_for_stage("probe"))
 
-    def test_pi_scope_contains_only_domain_and_dos_choice(self) -> None:
+    def test_pi_scope_contains_only_domain(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "scope.toml"
-            rendered = render_scope_toml("https://Example.com/path", True)
+            rendered = render_scope_toml("https://Example.com/path")
             path.write_text(rendered, encoding="utf-8")
             policy = ScopePolicy.load(path)
-        self.assertEqual(rendered.count("="), 2)
+        self.assertEqual(rendered.count("="), 1)
         self.assertEqual(policy.name, "example.com")
-        self.assertTrue(policy.permissions["allow_crawling"])
-        self.assertTrue(policy.permissions["allow_dos_tools"])
-        self.assertTrue(policy.is_tool_enabled("gobuster_dir"))
-
-    def test_crawler_stays_enabled_when_dos_tools_are_disabled(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "scope.toml"
-            path.write_text(render_scope_toml("example.com", False), encoding="utf-8")
-            policy = ScopePolicy.load(path)
-        self.assertTrue(policy.is_tool_enabled("katana"))
-        self.assertTrue(policy.is_tool_enabled("source_comments"))
-        self.assertFalse(policy.is_tool_enabled("gobuster_dir"))
-        self.assertFalse(policy.is_tool_enabled("parameth"))
 
 
 if __name__ == "__main__":

@@ -1,23 +1,20 @@
-"""리콘 단계, 권한, 도구의 고정 관계."""
+"""리콘 단계와 도구의 고정 관계."""
 
 STAGE_ORDER = ("collect", "probe", "crawl", "discovery")
 
-# 단계별 정책 키와 도구를 한곳에 둬 실행기와 CLI의 판단이 어긋나지 않게 한다.
-STAGE_PERMISSIONS = {
-    "collect": "allow_passive_collection",
-    "probe": "allow_http_probing",
-    "crawl": "allow_crawling",
-    "discovery": "allow_dos_tools",
-}
-
 STAGE_TOOLS = {
     "collect": ("dorkgen", "subfinder", "assetfinder", "amass_enum", "waybackurls"),
-    "probe": ("httpx", "robots_txt", "nuclei"),
+    "probe": ("httpx", "robots_txt"),
     "crawl": ("katana", "source_comments"),
     "discovery": ("gobuster_dir", "parameth"),
 }
 
-TOOL_NAMES = frozenset(tool for tools in STAGE_TOOLS.values() for tool in tools)
+# Nuclei는 전체 recon에 자동 포함하지 않고 필요할 때만 단독 실행한다.
+TOOL_STAGES = {
+    tool: stage for stage, tools in STAGE_TOOLS.items() for tool in tools
+}
+TOOL_STAGES["nuclei"] = "probe"
+TOOL_NAMES = frozenset(TOOL_STAGES)
 LOCAL_TOOLS = frozenset({"dorkgen"})
 
 
@@ -35,8 +32,7 @@ def tools_for_stage(stage: str) -> tuple[str, ...]:
 
 def stage_for_tool(tool: str) -> str:
     normalized = tool.strip().lower()
-    for stage, tools in STAGE_TOOLS.items():
-        if normalized in tools:
-            return stage
+    if normalized in TOOL_STAGES:
+        return TOOL_STAGES[normalized]
     choices = ", ".join(sorted(TOOL_NAMES))
     raise ValueError(f"Unknown tool {tool!r}; expected one of: {choices}")

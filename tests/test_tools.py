@@ -240,7 +240,7 @@ class AdapterTests(unittest.TestCase):
         )
         self.assertEqual(outcome.item_count, 2)
 
-    def test_nuclei_uses_fixed_policy_and_keeps_only_evidence_backed_scope_results(self) -> None:
+    def test_nuclei_uses_plain_command_and_keeps_jsonl_findings(self) -> None:
         run_dir = self.store.run_dir(self.state["run_id"])
         (run_dir / "parsed" / "alive-urls.txt").write_text(
             "http://recon-juice-shop:3000/\nhttp://outside.test/\n",
@@ -256,7 +256,7 @@ class AdapterTests(unittest.TestCase):
             "response": "HTTP/1.1 200 OK\r\nX-Test: yes\r\n\r\nbody",
         }
         out_of_scope = dict(in_scope, **{"matched-at": "http://outside.test/"})
-        no_evidence = dict(in_scope)
+        no_evidence = dict(in_scope, **{"template-id": "no-response"})
         no_evidence.pop("response")
         backend = FakeBackend(
             CommandResult(
@@ -269,20 +269,21 @@ class AdapterTests(unittest.TestCase):
         outcome = ToolRunner(backend, self.store).run_nuclei(self.policy, self.state)
 
         command = backend.commands[0]
-        self.assertIn("-disable-unsigned-templates", command)
-        self.assertIn("-disable-redirects", command)
-        self.assertIn("-no-interactsh", command)
-        tags_index = command.index("-tags") + 1
-        self.assertEqual(command[tags_index], "tech,exposure,misconfig")
-        self.assertNotIn("-dast", command)
-        self.assertNotIn("-headless", command)
+        for option in (
+            "-disable-unsigned-templates", "-disable-redirects", "-no-interactsh",
+            "-tags", "-exclude-tags", "-rate-limit", "-concurrency", "-bulk-size",
+            "-timeout", "-type",
+        ):
+            self.assertNotIn(option, command)
         findings = json.loads(
             (run_dir / "parsed" / "nuclei-findings.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(len(findings), 1)
+        self.assertEqual(len(findings), 3)
         self.assertEqual(findings[0]["status_code"], 200)
         self.assertEqual(findings[0]["evidence"], "raw/nuclei.jsonl:1")
-        self.assertEqual(outcome.item_count, 1)
+        self.assertEqual(findings[1]["matched_at"], "http://outside.test/")
+        self.assertIsNone(findings[2]["status_code"])
+        self.assertEqual(outcome.item_count, 3)
 
 
 if __name__ == "__main__":

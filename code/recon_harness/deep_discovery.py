@@ -25,10 +25,6 @@ from .tools import (
 
 
 KATANA_DEPTH = 4
-MAX_INITIAL_SOURCE_FILES = 100
-MAX_DISCOVERED_ASSETS = 60
-MAX_SOURCE_BYTES = 1_048_576
-MAX_COMMENTS_PER_FILE = 100
 
 _JS_ASSIGNMENT_RE = re.compile(
     r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]+)"
@@ -90,7 +86,7 @@ def _line_context(source: str, offset: int) -> tuple[int, str]:
     end = source.find("\n", offset)
     if end < 0:
         end = len(source)
-    return source.count("\n", 0, offset) + 1, source[start:end].strip()[:240]
+    return source.count("\n", 0, offset) + 1, source[start:end].strip()
 
 
 def _decode_literal(value: str) -> str | None:
@@ -401,7 +397,7 @@ def _manifest_candidates(body: str) -> list[str]:
         value
         for value in values
         if value.startswith(("/", "http://", "https://")) or _looks_like_asset(value)
-    ][:300]
+    ]
 
 
 def _sourcemap_sources(body: str) -> tuple[list[str], list[str]]:
@@ -413,7 +409,7 @@ def _sourcemap_sources(body: str) -> tuple[list[str], list[str]]:
         return [], []
     sources = [str(value) for value in payload.get("sources", []) if isinstance(value, str)]
     contents = [str(value) for value in payload.get("sourcesContent", []) if isinstance(value, str)]
-    return sources[:300], contents[:50]
+    return sources, contents
 
 
 class DeepDiscoveryToolRunner(ToolRunner):
@@ -423,7 +419,7 @@ class DeepDiscoveryToolRunner(ToolRunner):
         remote = self._copy_lines_input(state, "katana-input.txt", self._live_urls(policy, state))
         args = [
             "katana", "-list", remote, "-silent", "-d", str(KATANA_DEPTH),
-            "-jc", "-rl", str(policy.rate_limit),
+            "-jc",
         ]
         for pattern in _katana_scope_regexes(policy):
             args.extend(["-cs", pattern])
@@ -461,9 +457,7 @@ class DeepDiscoveryToolRunner(ToolRunner):
         result = self.backend.run(
             [
                 "httpx", "-l", remote, "-silent", "-j", "-sc", "-ct", "-cl",
-                "-irr", "-rstr", str(MAX_SOURCE_BYTES), "-rl", str(policy.rate_limit),
-                "-t", str(policy.concurrency), "-timeout", str(policy.timeout_seconds),
-                "-duc",
+                "-irr", "-duc",
             ],
             process_timeout=900,
         )
@@ -475,7 +469,7 @@ class DeepDiscoveryToolRunner(ToolRunner):
         katana_urls = run_dir / "parsed" / "katana-urls.txt"
         if katana_urls.exists():
             urls.extend(_unique_lines(katana_urls.read_text(encoding="utf-8")))
-        candidates = _candidate_source_urls(policy, urls)[:MAX_INITIAL_SOURCE_FILES]
+        candidates = _candidate_source_urls(policy, urls)
         if not candidates:
             return ToolOutcome(
                 0,
@@ -540,7 +534,7 @@ class DeepDiscoveryToolRunner(ToolRunner):
                 extracted_comments = _extract_c_style_comments(body, kind)
             else:
                 extracted_comments = []
-            for comment in extracted_comments[:MAX_COMMENTS_PER_FILE]:
+            for comment in extracted_comments:
                 text = str(comment["text"])
                 key = (source_url, int(comment["line"]), str(comment["syntax"]), text)
                 if key in seen_comments:
@@ -595,7 +589,7 @@ class DeepDiscoveryToolRunner(ToolRunner):
             process_record(record, allow_discovery=True)
 
         secondary_result = None
-        secondary_urls = discovered_urls[:MAX_DISCOVERED_ASSETS]
+        secondary_urls = discovered_urls
         if secondary_urls:
             secondary_result, secondary_records = self._fetch_source_records(
                 state, policy, secondary_urls, "source_assets"

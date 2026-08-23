@@ -1,12 +1,12 @@
-"""정책과 승인을 적용해 네 단계만 순서대로 실행한다."""
+"""네 단계와 개별 도구를 실행한다."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from .deep_discovery import DeepDiscoveryToolRunner
-from .docker_backend import DockerBackend
-from .models import LOCAL_TOOLS, STAGE_ORDER, STAGE_PERMISSIONS, stage_for_tool, tools_for_stage, validate_stage
+from .docker_backend import NUCLEI_IMAGE, DockerBackend
+from .models import LOCAL_TOOLS, STAGE_ORDER, stage_for_tool, tools_for_stage, validate_stage
 from .policy import PolicyError, ScopePolicy
 from .storage import RunStore, utc_now
 from .tools import run_local_dorkgen
@@ -22,7 +22,7 @@ class HarnessRunner:
     def _backend_for_tool(
         self, policy: ScopePolicy, run_id: str, tool: str
     ) -> DockerBackend:
-        image = policy.nuclei_image if tool == "nuclei" else policy.worker_image
+        image = NUCLEI_IMAGE if tool == "nuclei" else policy.worker_image
         backend = DockerBackend(
             image,
             workspace_dir=self.store.run_dir(run_id),
@@ -63,15 +63,8 @@ class HarnessRunner:
         state["status"] = "running"
         self.store.save(state)
         failures = 0
-        enabled = [tool for tool in tools_for_stage(normalized) if policy.is_tool_enabled(tool)]
-        if not enabled:
-            stage_state["status"] = "skipped"
-            stage_state["finished_at"] = utc_now()
-            self.store.save(state)
-            return state
-
         try:
-            for tool in enabled:
+            for tool in tools_for_stage(normalized):
                 if stage_state["tools"].get(tool, {}).get("status") == "completed":
                     continue
                 outcome = (
@@ -122,8 +115,6 @@ class HarnessRunner:
         stage = stage_for_tool(tool)
         state = self.store.load(run_id)
         policy = self.policy_for_run(state)
-        if not policy.is_tool_enabled(tool):
-            raise PolicyError(f"Tool {tool!r} is disabled by this run's scope")
 
         backend = (
             None
@@ -154,7 +145,7 @@ class HarnessRunner:
             "item_count": outcome.item_count,
             "error": outcome.error,
         }
-        enabled = [name for name in tools_for_stage(stage) if policy.is_tool_enabled(name)]
+        enabled = list(tools_for_stage(stage))
         recorded = [stage_state["tools"].get(name, {}).get("status") for name in enabled]
         if all(value in {"completed", "skipped"} for value in recorded):
             stage_state["status"] = "completed"
@@ -170,13 +161,6 @@ class HarnessRunner:
     def run_all(self, run_id: str) -> dict[str, Any]:
         state = self.store.load(run_id)
         for stage in STAGE_ORDER:
-            policy = self.policy_for_run(state)
-            if not policy.permissions.get(STAGE_PERMISSIONS[stage], False):
-                item = state["stages"][stage]
-                item["status"] = "skipped"
-                item["finished_at"] = utc_now()
-                self.store.save(state)
-                continue
             state = self._run_stage(run_id, stage)
         if all(
             item["status"] in {"completed", "completed_with_errors", "skipped"}

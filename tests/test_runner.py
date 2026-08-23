@@ -13,25 +13,23 @@ from recon_harness.tools import ToolOutcome
 
 
 class RunnerSelectionTests(unittest.TestCase):
-    def _created_run(self, dos_allowed: bool = False):
+    def _created_run(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         scope_path = root / "scope.toml"
-        scope_path.write_text(render_scope_toml("example.com", dos_allowed), encoding="utf-8")
+        scope_path.write_text(render_scope_toml("example.com"), encoding="utf-8")
         policy = ScopePolicy.load(scope_path)
         store = RunStore(root / "runs")
         state = store.create(scope_path, policy.snapshot())
         return store, state
 
-    def _run(self, dos_allowed: bool) -> tuple[list[str], dict]:
+    def _run(self) -> tuple[list[str], dict]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         scope_path = root / "scope.toml"
-        scope_path.write_text(
-            render_scope_toml("example.com", dos_allowed), encoding="utf-8"
-        )
+        scope_path.write_text(render_scope_toml("example.com"), encoding="utf-8")
         policy = ScopePolicy.load(scope_path)
         store = RunStore(root / "runs")
         state = store.create(scope_path, policy.snapshot())
@@ -49,13 +47,8 @@ class RunnerSelectionTests(unittest.TestCase):
             finished = runner.run_all(state["run_id"])
         return called, finished
 
-    def test_crawl_runs_without_dos_tools(self) -> None:
-        called, state = self._run(False)
-        self.assertEqual(called, ["collect", "probe", "crawl"])
-        self.assertEqual(state["stages"]["discovery"]["status"], "skipped")
-
-    def test_discovery_runs_when_dos_tools_are_allowed(self) -> None:
-        called, _state = self._run(True)
+    def test_all_four_stages_run(self) -> None:
+        called, _state = self._run()
         self.assertEqual(called, ["collect", "probe", "crawl", "discovery"])
 
     def test_one_stage_can_run_without_previous_stage(self) -> None:
@@ -77,11 +70,6 @@ class RunnerSelectionTests(unittest.TestCase):
             result = runner.run_tool(state["run_id"], "subfinder")
         self.assertEqual(result["stages"]["collect"]["status"], "partial")
         self.assertEqual(result["stages"]["collect"]["tools"]["subfinder"]["item_count"], 1)
-
-    def test_disabled_individual_tool_is_rejected(self) -> None:
-        store, state = self._created_run(False)
-        with self.assertRaises(ValueError):
-            HarnessRunner(store).run_tool(state["run_id"], "gobuster_dir")
 
     def test_dorkgen_individual_run_does_not_start_docker(self) -> None:
         store, state = self._created_run()

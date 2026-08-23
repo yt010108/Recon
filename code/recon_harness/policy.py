@@ -9,12 +9,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from .docker_backend import DEFAULT_IMAGE, NUCLEI_IMAGE
-from .models import STAGE_PERMISSIONS, TOOL_NAMES, validate_stage
+from .docker_backend import DEFAULT_IMAGE
+from .models import validate_stage
 
 
 class PolicyError(ValueError):
-    """스코프 밖의 대상이나 비활성 단계를 요청했을 때 발생한다."""
+    """스코프 밖의 대상을 요청했을 때 발생한다."""
 
 
 def _domain_matches(host: str, domain: str) -> bool:
@@ -26,18 +26,11 @@ def _domain_matches(host: str, domain: str) -> bool:
 class ScopePolicy:
     path: Path
     domain: str
-    dos_allowed: bool
     base_url: str
     docker_network: str | None = None
     worker_image: str = DEFAULT_IMAGE
-    nuclei_image: str = NUCLEI_IMAGE
-    rate_limit: int = 5
-    concurrency: int = 2
-    timeout_seconds: int = 10
     domains: list[str] = field(init=False)
     allowed_ports: list[int] = field(init=False)
-    permissions: dict[str, bool] = field(init=False)
-    enabled_tools: list[str] = field(init=False)
 
     def __post_init__(self) -> None:
         self.domains = [self.domain]
@@ -46,16 +39,6 @@ class ScopePolicy:
             self.allowed_ports = [parsed.port]
         else:
             self.allowed_ports = [80, 443]
-        self.permissions = {
-            "allow_passive_collection": True,
-            "allow_http_probing": True,
-            "allow_crawling": True,
-            "allow_dos_tools": self.dos_allowed,
-        }
-        conditional = {"gobuster_dir", "parameth"}
-        self.enabled_tools = sorted(
-            tool for tool in TOOL_NAMES if self.dos_allowed or tool not in conditional
-        )
 
     @classmethod
     def load(cls, path: str | Path) -> "ScopePolicy":
@@ -75,7 +58,6 @@ class ScopePolicy:
         policy = cls(
             path=source,
             domain=domain,
-            dos_allowed=bool(scope.get("dos_allowed", False)),
             base_url=base_url,
             docker_network=network,
         )
@@ -109,14 +91,7 @@ class ScopePolicy:
         return value
 
     def validate_stage(self, stage: str) -> str:
-        normalized = validate_stage(stage)
-        permission = STAGE_PERMISSIONS[normalized]
-        if not self.permissions[permission]:
-            raise PolicyError(f"Stage {normalized!r} is disabled")
-        return normalized
-
-    def is_tool_enabled(self, tool: str) -> bool:
-        return tool in self.enabled_tools
+        return validate_stage(stage)
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -125,11 +100,5 @@ class ScopePolicy:
             "domains": self.domains,
             "allowed_ports": self.allowed_ports,
             "worker_image": self.worker_image,
-            "nuclei_image": self.nuclei_image,
             "docker_network": self.docker_network,
-            "rate_limit": self.rate_limit,
-            "concurrency": self.concurrency,
-            "timeout_seconds": self.timeout_seconds,
-            "enabled_tools": self.enabled_tools,
-            "permissions": self.permissions,
         }

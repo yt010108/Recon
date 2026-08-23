@@ -49,9 +49,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates chromium gobuster httpx-toolkit python2 subfinder amass tini \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* \
-    && useradd --create-home --uid 10001 --shell /bin/bash recon \
-    && mkdir -p /work /output /opt/recon-wordlists \
-    && chown -R recon:recon /work /output
+    && mkdir -p /work /output /opt/recon-wordlists
 
 COPY --from=go-builder /out/waybackurls /usr/local/bin/waybackurls
 COPY --from=go-builder /out/assetfinder /usr/local/bin/assetfinder
@@ -67,9 +65,8 @@ RUN chmod 0755 /usr/local/bin/waybackurls /usr/local/bin/assetfinder /usr/local/
     && ln -s /opt/parameth/parameth.py /usr/local/bin/parameth
 
 ENV PYTHONPATH=/opt/python2-site \
-    HOME=/home/recon
+    HOME=/root
 
-USER recon
 WORKDIR /work
 
 ENTRYPOINT ["/usr/bin/tini", "--"]

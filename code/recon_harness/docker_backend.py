@@ -128,35 +128,18 @@ class DockerBackend:
             "--name",
             container_name,
             "--pull=never",
-            "--read-only",
-            "--cap-drop",
-            "ALL",
-            "--security-opt",
-            "no-new-privileges:true",
-            "--pids-limit",
-            "256",
-            "--memory",
-            "2g",
-            "--cpus",
-            "2",
-            "--shm-size",
-            "512m",
-            "--tmpfs",
-            "/tmp:rw,exec,size=512m,mode=1777",
-            "--tmpfs",
-            "/home/recon:rw,size=128m,mode=1777",
         ]
         if input_text is not None:
             command.append("-i")
         if self.network:
             command.extend(["--network", self.network])
         if self.workspace_dir is not None:
-            # 런 전체가 아니라 입력 전용 디렉터리만 읽기 전용으로 노출한다.
+            # 필요한 입력 파일만 컨테이너에 노출한다.
             input_dir = self._input_dir()
             command.extend(
                 [
                     "--mount",
-                    f"type=bind,source={input_dir},target={REMOTE_INPUT_DIR},readonly",
+                    f"type=bind,source={input_dir},target={REMOTE_INPUT_DIR}",
                 ]
             )
         for key, value in (environment or {}).items():

@@ -32,13 +32,13 @@ def normalize_domain(value: str) -> str:
     return domain
 
 
-def render_scope_toml(domain: str, dos_allowed: bool) -> str:
-    """새 런의 스코프에는 사용자가 답한 두 값만 저장한다."""
-    return (
-        "[scope]\n"
-        f"domain = {json.dumps(normalize_domain(domain), ensure_ascii=False)}\n"
-        f"dos_allowed = {'true' if dos_allowed else 'false'}\n"
-    )
+def render_scope_toml(domain: str) -> str:
+    """새 런에는 허용된 도메인 하나만 저장한다."""
+    return "\n".join([
+        "[scope]",
+        f"domain = {json.dumps(normalize_domain(domain), ensure_ascii=False)}",
+        "",
+    ])
 
 
 def _store() -> RunStore:
@@ -66,12 +66,12 @@ def _state_summary(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _create_run(domain: str, dos_allowed: bool) -> tuple[RunStore, dict[str, Any]]:
+def _create_run(domain: str) -> tuple[RunStore, dict[str, Any]]:
     store = _store()
     with tempfile.TemporaryDirectory(prefix="recon-scope-") as temporary:
         scope_path = Path(temporary) / "scope.toml"
         scope_path.write_text(
-            render_scope_toml(domain, dos_allowed),
+            render_scope_toml(domain),
             encoding="utf-8",
             newline="\n",
         )
@@ -89,13 +89,13 @@ def _emit_with_report(store: RunStore, state: dict[str, Any]) -> int:
 
 
 def cmd_create(args: argparse.Namespace) -> int:
-    _store_value, state = _create_run(args.domain, args.dos_allowed)
+    _store_value, state = _create_run(args.domain)
     _emit(_state_summary(state))
     return 0
 
 
 def cmd_start(args: argparse.Namespace) -> int:
-    store, state = _create_run(args.domain, args.dos_allowed)
+    store, state = _create_run(args.domain)
 
     state = HarnessRunner(store).run_all(state["run_id"])
     return _emit_with_report(store, state)
@@ -131,7 +131,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 def cmd_doctor(args: argparse.Namespace) -> int:
     backend = DockerBackend(args.image)
     status = backend.doctor()
-    nuclei_backend = DockerBackend(args.nuclei_image)
+    nuclei_backend = DockerBackend(NUCLEI_IMAGE)
     nuclei_status = nuclei_backend.doctor()
     tools: dict[str, dict[str, Any]] = {}
 
@@ -174,16 +174,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     start = commands.add_parser("start", help="Run recon for one allowed domain")
     start.add_argument("domain")
-    start.add_argument(
-        "--dos-allowed",
-        action="store_true",
-        help="Also run Gobuster and Parameth",
-    )
     start.set_defaults(handler=cmd_start)
 
     create = commands.add_parser("create", help="Create a run without network requests")
     create.add_argument("domain")
-    create.add_argument("--dos-allowed", action="store_true")
     create.set_defaults(handler=cmd_create)
 
     stage = commands.add_parser("stage", help="Run one stage in an existing run")
@@ -209,7 +203,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor = commands.add_parser("doctor", help="Check Docker and tools")
     doctor.add_argument("--image", default=DEFAULT_IMAGE)
-    doctor.add_argument("--nuclei-image", default=NUCLEI_IMAGE)
     doctor.set_defaults(handler=cmd_doctor)
     return parser
 

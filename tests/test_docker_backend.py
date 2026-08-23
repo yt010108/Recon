@@ -35,7 +35,7 @@ class DockerBackendTests(unittest.TestCase):
         self.assertEqual(mocked.call_args_list[0].args[0], ["docker", "image", "inspect", DEFAULT_IMAGE])
         self.assertEqual(mocked.call_args_list[1].args[0], ["docker", "network", "inspect", "recon-lab"])
 
-    def test_run_builds_locked_ephemeral_container_command(self) -> None:
+    def test_run_builds_unrestricted_ephemeral_container_command(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary) / "run"
             workspace.mkdir()
@@ -59,13 +59,15 @@ class DockerBackendTests(unittest.TestCase):
         command = mocked.call_args.args[0]
         self.assertEqual(result.stdout, "ok\n")
         self.assertIn("--rm", command)
-        self.assertIn("--read-only", command)
         self.assertIn("--pull=never", command)
-        self.assertIn("no-new-privileges:true", command)
         self.assertIn("--network", command)
         self.assertIn("recon-lab", command)
         self.assertIn("TEST_MODE=1", command)
-        self.assertTrue(any(REMOTE_INPUT_DIR in item and "readonly" in item for item in command))
+        self.assertNotIn("--read-only", command)
+        self.assertNotIn("--cap-drop", command)
+        self.assertNotIn("--memory", command)
+        self.assertNotIn("--cpus", command)
+        self.assertTrue(any(REMOTE_INPUT_DIR in item and "readonly" not in item for item in command))
         self.assertEqual(command[-6:], [DEFAULT_IMAGE, "timeout", "--signal=TERM", "30s", "which", "httpx"])
 
     def test_copy_to_maps_only_the_worker_input_directory(self) -> None:

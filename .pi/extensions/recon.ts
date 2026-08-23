@@ -62,30 +62,15 @@ function toolResult(result: CliResult) {
 }
 
 export default function (pi: ExtensionAPI) {
-  // Pi가 정책 검사를 우회해 리콘 명령을 직접 실행하지 못하게 한다.
-  pi.on("tool_call", async (event) => {
-    if (event.toolName !== "bash") return undefined;
-    const input = event.input as { command?: unknown };
-    const command = typeof input.command === "string" ? input.command : "";
-    const directRecon = /(?:^|\s)(?:docker\s+(?:container\s+)?(?:exec|run)|subfinder|assetfinder|amass|httpx|waybackurls|katana|gobuster|parameth|nuclei)(?:\s|$)|recon_harness\.cli\s+(?:start|create|stage|tool)/i;
-    if (directRecon.test(command)) {
-      return { block: true, reason: "리콘은 recon_* 전용 도구를 통해 실행합니다." };
-    }
-    return undefined;
-  });
-
   pi.registerTool({
     name: "recon_create",
     label: "Recon: Run 생성",
     description: "Create a scoped run without sending network requests.",
     parameters: Type.Object({
       domain: Type.String(),
-      dos_allowed: Type.Boolean(),
     }),
     async execute(_toolCallId, params, signal) {
-      const args = ["create", params.domain];
-      if (params.dos_allowed) args.push("--dos-allowed");
-      return toolResult(await runCli(args, signal));
+      return toolResult(await runCli(["create", params.domain], signal));
     },
   });
 
@@ -122,15 +107,12 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "recon_start",
     label: "Recon: 시작",
-    description: "Run complete recon for one allowed domain. Katana and policy-limited Nuclei always run. Gobuster and Parameth run only when dos_allowed is true.",
+    description: "Run complete recon for one allowed domain. Nuclei is available separately through recon_run.",
     parameters: Type.Object({
       domain: Type.String({ description: "The single allowed domain" }),
-      dos_allowed: Type.Boolean({ description: "Whether the program explicitly allows high-volume Gobuster and Parameth requests" }),
     }),
     async execute(_toolCallId, params, signal) {
-      const args = ["start", params.domain];
-      if (params.dos_allowed) args.push("--dos-allowed");
-      return toolResult(await runCli(args, signal));
+      return toolResult(await runCli(["start", params.domain], signal));
     },
   });
 

@@ -85,7 +85,7 @@ def build_report(store: RunStore, state: dict[str, Any]):
         f"- 검토할 입력 지점: `{len(sinks)}`", "",
         "## 자산", "", "| URL | 상태 | 제목 | 기술 |", "|---|---:|---|---|",
     ]
-    for item in services[:30]:
+    for item in services:
         tech = item.get("tech") or item.get("technologies") or []
         tech = ", ".join(map(str, tech)) if isinstance(tech, list) else tech
         lines.append(f"| {_cell(item.get('url') or item.get('input'))} | {_cell(item.get('status_code'))} | {_cell(item.get('title'))} | {_cell(tech)} |")
@@ -93,12 +93,12 @@ def build_report(store: RunStore, state: dict[str, Any]):
         lines.append("| - | - | 활성 서비스 없음 | - |")
 
     lines.extend(["", "## 주요 엔드포인트", "", "| 역할 | URL |", "|---|---|"])
-    lines.extend(f"| {_cell(', '.join(roles))} | {_cell(url)} |" for url, roles in endpoints[:50])
+    lines.extend(f"| {_cell(', '.join(roles))} | {_cell(url)} |" for url, roles in endpoints)
     if not endpoints:
         lines.append("| - | 역할을 추정할 엔드포인트 없음 |")
 
     lines.extend(["", "## 소스에서 찾은 경로와 액션", "", "| 유형 | 값 | 출처 |", "|---|---|---|"])
-    for item in source_endpoints[:50]:
+    for item in source_endpoints:
         lines.append(f"| {_cell(item.get('kind'))} | {_cell(item.get('endpoint') or item.get('value'))} | {_cell(item.get('source'))}:{_cell(item.get('line'))} |")
     if not source_endpoints:
         lines.append("| - | 발견된 후보 없음 | - |")
@@ -121,11 +121,11 @@ def build_report(store: RunStore, state: dict[str, Any]):
     )
     lines.extend([
         "", "## Nuclei 발견 후보", "",
-        "공식 서명 HTTP 템플릿의 자동 탐지 결과이며 취약점 확정이 아니다.", "",
+        "Nuclei 템플릿의 자동 탐지 결과이며 취약점 확정이 아니다.", "",
         "| 심각도 | 템플릿 | 매처 | 이름 | 대상 | HTTP | 근거 |",
         "|---|---|---|---|---|---:|---|",
     ])
-    for item in nuclei_findings[:100]:
+    for item in nuclei_findings:
         lines.append(
             f"| {_cell(item.get('severity'))} | {_cell(item.get('template_id'))} | "
             f"{_cell(item.get('matcher_name'))} | {_cell(item.get('name'))} | "
@@ -136,7 +136,7 @@ def build_report(store: RunStore, state: dict[str, Any]):
         lines.append("| - | - | - | 근거가 확인된 발견 후보 없음 | - | - | - |")
 
     lines.extend(["", "## 우선 검토할 입력 지점", "", "경로명과 쿼리 파라미터에 따른 후보이며 취약점 판정이 아니다.", "", "| 후보 유형 | URL | 파라미터 |", "|---|---|---|"])
-    for url, reasons in sinks[:50]:
+    for url, reasons in sinks:
         params = ", ".join(name for name, _ in parse_qsl(urlsplit(url).query, keep_blank_values=True)) or "-"
         lines.append(f"| {_cell(', '.join(reasons))} | {_cell(url)} | {_cell(params)} |")
     if not sinks:

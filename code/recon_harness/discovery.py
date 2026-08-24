@@ -150,6 +150,15 @@ class DiscoveryRunner:
             if url := _canonical_url(policy, value):
                 probed.add(url)
                 live.add(url)
+        for name in ("robots_txt.jsonl", "source_comments.jsonl", "source_assets.jsonl"):
+            path = run_dir / "raw" / name
+            if not path.exists():
+                continue
+            for item in _httpx_records(path.read_text(encoding="utf-8")):
+                for key in ("input", "url", "final_url"):
+                    value = item.get(key)
+                    if isinstance(value, str) and (url := _canonical_url(policy, value)):
+                        probed.add(url)
         crawled = {
             url
             for value in _lines(run_dir / "raw" / "katana-input.txt")

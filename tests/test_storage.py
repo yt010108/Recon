@@ -22,70 +22,19 @@ class RunStoreTests(unittest.TestCase):
             run_dir = store.run_dir(state["run_id"])
             self.assertTrue((run_dir / "scope.toml").is_file())
             self.assertFalse((run_dir / "state.json").exists())
-            self.assertTrue((run_dir / "events.jsonl").is_file())
+            self.assertFalse((run_dir / "events.jsonl").exists())
             self.assertTrue((run_dir / "screenshots").is_dir())
             self.assertTrue((run_dir / "progress.md").is_file())
-            self.assertIn(
-                "`events.jsonl`에서 생성",
-                (run_dir / "progress.md").read_text(encoding="utf-8"),
-            )
-            self.assertNotIn(
-                "recon-state",
-                (run_dir / "progress.md").read_text(encoding="utf-8"),
-            )
-            (run_dir / "progress.md").write_text("derived file", encoding="utf-8")
             loaded = store.load(state["run_id"])
             self.assertEqual(loaded["scope"]["name"], "recon-juice-shop")
-
-    def test_save_appends_state_events(self) -> None:
-        policy = ScopePolicy.load(PROJECT_ROOT / "tests" / "lab" / "scope.toml")
-        with tempfile.TemporaryDirectory() as temporary:
-            store = RunStore(temporary)
-            state = store.create(policy.path, policy.snapshot())
-            path = store.run_dir(state["run_id"]) / "events.jsonl"
-            first = path.read_text(encoding="utf-8")
-            state["status"] = "running"
-            store.save(state)
-            second = path.read_text(encoding="utf-8")
-            self.assertTrue(second.startswith(first))
-            self.assertEqual(store.load(state["run_id"])["status"], "running")
-
-    def test_save_repairs_a_truncated_last_event(self) -> None:
-        policy = ScopePolicy.load(PROJECT_ROOT / "tests" / "lab" / "scope.toml")
-        with tempfile.TemporaryDirectory() as temporary:
-            store = RunStore(temporary)
-            state = store.create(policy.path, policy.snapshot())
-            path = store.run_dir(state["run_id"]) / "events.jsonl"
-            with path.open("ab") as stream:
-                stream.write(b'{"type":"state","state":"\xe2')
-
-            self.assertEqual(store.load(state["run_id"])["status"], "ready")
-
-            state["status"] = "running"
-            store.save(state)
-
-            self.assertEqual(store.load(state["run_id"])["status"], "running")
-            for line in path.read_text(encoding="utf-8").splitlines():
-                self.assertIsInstance(json.loads(line), dict)
-
-    def test_list_runs_uses_events_when_progress_is_missing(self) -> None:
-        policy = ScopePolicy.load(PROJECT_ROOT / "tests" / "lab" / "scope.toml")
-        with tempfile.TemporaryDirectory() as temporary:
-            store = RunStore(temporary)
-            state = store.create(policy.path, policy.snapshot())
-            (store.run_dir(state["run_id"]) / "progress.md").unlink()
-
-            self.assertEqual(
-                [item["run_id"] for item in store.list_runs()],
-                [state["run_id"]],
-            )
 
     def test_report_is_created_and_registered(self) -> None:
         policy = ScopePolicy.load(PROJECT_ROOT / "tests" / "lab" / "scope.toml")
         with tempfile.TemporaryDirectory() as temporary:
             store = RunStore(temporary)
             state = store.create(policy.path, policy.snapshot())
-            (store.run_dir(state["run_id"]) / "parsed" / "source-comments.json").write_text(
+            run_dir = store.run_dir(state["run_id"])
+            (run_dir / "parsed" / "source-comments.json").write_text(
                 json.dumps(
                     [
                         {
@@ -98,14 +47,14 @@ class RunStoreTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (store.run_dir(state["run_id"]) / "parsed" / "hosts.txt").write_text(
+            (run_dir / "parsed" / "hosts.txt").write_text(
                 "recon-juice-shop\n", encoding="utf-8"
             )
-            (store.run_dir(state["run_id"]) / "parsed" / "katana-urls.txt").write_text(
+            (run_dir / "parsed" / "katana-urls.txt").write_text(
                 "http://recon-juice-shop:3000/api/orders?id=1\n",
                 encoding="utf-8",
             )
-            (store.run_dir(state["run_id"]) / "parsed" / "url-queue.jsonl").write_text(
+            (run_dir / "parsed" / "url-queue.jsonl").write_text(
                 json.dumps(
                     {
                         "url": "http://recon-juice-shop:3000/admin?debug=1",
@@ -116,10 +65,10 @@ class RunStoreTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            (store.run_dir(state["run_id"]) / "parsed" / "google-dorks.txt").write_text(
+            (run_dir / "parsed" / "google-dorks.txt").write_text(
                 "site:recon-juice-shop\n", encoding="utf-8"
             )
-            (store.run_dir(state["run_id"]) / "parsed" / "nuclei-findings.json").write_text(
+            (run_dir / "parsed" / "nuclei-findings.json").write_text(
                 json.dumps(
                     [
                         {
@@ -140,8 +89,8 @@ class RunStoreTests(unittest.TestCase):
             self.assertTrue(any(item["path"] == "report.md" for item in loaded["artifacts"]))
             text = report.read_text(encoding="utf-8")
             self.assertIn("http://recon-juice-shop:3000", text)
-            self.assertIn("## 주요 엔드포인트", text)
             self.assertIn("http://recon-juice-shop:3000/admin?debug=1", text)
+            self.assertIn("## 주요 엔드포인트", text)
             self.assertIn("## 우선 검토할 입력 지점", text)
             self.assertIn("조회·식별자 입력", text)
             self.assertIn("## Google Dorks", text)

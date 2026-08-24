@@ -40,7 +40,8 @@ runs/<RUN_ID>/
 Wayback·robots.txt·Katana·source 결과는 출처를 보존한 `parsed/url-queue.jsonl`로 합친다.
 새 in-scope URL만 HTTPX로 확인하고, 새 live origin과 HTML 후보만 Katana에 최대 2회
 다시 넣는다. 실패한 명령은 같은 round에서 재시도하며, 새 항목이 없으면 즉시 끝낸다.
-큐는 전체 1,000개·origin별 100개, Katana seed는 run 전체에서 origin별 3개로 제한한다.
+큐는 전체 1,000개·origin별 100개, Katana seed는 run 전체에서 origin별 3개로 제한하고
+재확인 Katana는 동시 요청 1개·초당 5개로 실행한다.
 
 `scope.toml`은 최소 입력만 저장한다.
 

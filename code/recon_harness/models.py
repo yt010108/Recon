@@ -6,7 +6,7 @@ STAGE_TOOLS = {
     "collect": ("dorkgen", "subfinder", "assetfinder", "amass_enum", "waybackurls"),
     "probe": ("httpx", "robots_txt"),
     "crawl": ("katana", "source_comments"),
-    "discovery": ("gobuster_dir", "parameth"),
+    "discovery": ("url_discovery", "gobuster_dir", "parameth"),
 }
 
 # Nuclei는 전체 recon에 자동 포함하지 않고 필요할 때만 단독 실행한다.
@@ -14,7 +14,8 @@ TOOL_STAGES = {
     tool: stage for stage, tools in STAGE_TOOLS.items() for tool in tools
 }
 TOOL_STAGES["nuclei"] = "probe"
-TOOL_NAMES = frozenset(TOOL_STAGES)
+INTERNAL_TOOLS = frozenset({"url_discovery"})
+TOOL_NAMES = frozenset(TOOL_STAGES) - INTERNAL_TOOLS
 LOCAL_TOOLS = frozenset({"dorkgen"})
 
 
@@ -32,7 +33,7 @@ def tools_for_stage(stage: str) -> tuple[str, ...]:
 
 def stage_for_tool(tool: str) -> str:
     normalized = tool.strip().lower()
-    if normalized in TOOL_STAGES:
+    if normalized in TOOL_NAMES:
         return TOOL_STAGES[normalized]
     choices = ", ".join(sorted(TOOL_NAMES))
     raise ValueError(f"Unknown tool {tool!r}; expected one of: {choices}")

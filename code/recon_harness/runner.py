@@ -102,7 +102,15 @@ class HarnessRunner:
             in {"completed", "completed_with_errors", "skipped"}
             for stage in STAGE_ORDER
         )
-        state["status"] = "completed" if completed else "ready"
+        has_errors = any(
+            state["stages"][stage]["status"] == "completed_with_errors"
+            for stage in STAGE_ORDER
+        )
+        state["status"] = (
+            "completed_with_errors" if completed and has_errors
+            else "completed" if completed
+            else "ready"
+        )
         self.store.save(state)
         return state
 
@@ -162,10 +170,4 @@ class HarnessRunner:
         state = self.store.load(run_id)
         for stage in STAGE_ORDER:
             state = self._run_stage(run_id, stage)
-        if all(
-            item["status"] in {"completed", "completed_with_errors", "skipped"}
-            for item in state["stages"].values()
-        ):
-            state["status"] = "completed"
-            self.store.save(state)
         return state

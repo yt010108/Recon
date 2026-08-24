@@ -1,4 +1,4 @@
-"""런 상태와 진행 상황을 progress.md 하나에 보존한다."""
+"""events.jsonl에 상태를 보존하고 progress.md 요약을 만든다."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .events import append_event, latest_state, read_events
 from .models import STAGE_ORDER
 
 
@@ -89,7 +90,13 @@ class RunStore:
         return path
 
     def load(self, run_id: str) -> dict[str, Any]:
-        path = self.run_dir(run_id) / "progress.md"
+        run_dir = self.run_dir(run_id)
+        state = latest_state(run_dir / "events.jsonl")
+        if state is not None:
+            return state
+
+        # 기존 run은 progress.md를 한 번 읽은 뒤 다음 save부터 events.jsonl로 전환한다.
+        path = run_dir / "progress.md"
         try:
             text = path.read_text(encoding="utf-8")
             payload = text.split("<!-- recon-state\n", 1)[1].split("\n-->", 1)[0]
@@ -99,14 +106,30 @@ class RunStore:
 
     def save(self, state: dict[str, Any]) -> None:
         state["updated_at"] = utc_now()
+        append_event(
+            self.run_dir(state["run_id"]) / "events.jsonl",
+            "state",
+            state=state,
+        )
         self._write_progress(state)
+
+    def append_event(self, state: dict[str, Any], event_type: str, **payload: Any) -> None:
+        append_event(
+            self.run_dir(state["run_id"]) / "events.jsonl",
+            event_type,
+            **payload,
+        )
+
+    def events(self, run_id: str):
+        return read_events(self.run_dir(run_id) / "events.jsonl")
 
     def _write_progress(self, state: dict[str, Any]) -> None:
         next_stage = next(
             (
                 stage
                 for stage in STAGE_ORDER
-                if state["stages"][stage]["status"] in {"pending", "failed"}
+                if state["stages"][stage]["status"]
+                in {"pending", "running", "partial", "failed"}
             ),
             "complete",
         )
@@ -119,17 +142,29 @@ class RunStore:
             f"- Artifacts: `{len(state['artifacts'])}`",
             f"- Next: `{next_stage}`",
             "",
-            "| Stage | Status | Tools |",
-            "|---|---|---|",
         ]
+        discovery = state.get("discovery")
+        if isinstance(discovery, dict):
+            lines.extend(
+                [
+                    (
+                        f"- Discovery: {discovery.get('rounds', 0)}/2 rounds, "
+                        f"{discovery.get('urls', 0)} URLs, "
+                        f"{discovery.get('queued', 0)} queued, "
+                        f"{discovery.get('stop_reason', '-')}"
+                    ),
+                    "",
+                ]
+            )
+        lines.extend(["| Stage | Status | Tools |", "|---|---|---|"])
         for stage in STAGE_ORDER:
             item = state["stages"][stage]
             tools = ", ".join(item["tools"]) if item["tools"] else "-"
             lines.append(f"| {stage} | {item['status']} | {tools} |")
-        lines.extend(["", "이 파일만으로 실행 상태를 확인하고 재개한다.", ""])
-        metadata = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
-        content = f"<!-- recon-state\n{metadata}\n-->\n\n" + "\n".join(lines)
-        atomic_write_text(self.run_dir(state["run_id"]) / "progress.md", content)
+        lines.extend(["", "이 요약은 `events.jsonl`에서 생성한다.", ""])
+        atomic_write_text(
+            self.run_dir(state["run_id"]) / "progress.md", "\n".join(lines)
+        )
 
     def add_artifact(self, state: dict[str, Any], path: Path, kind: str, tool: str) -> None:
         relative = path.resolve().relative_to(self.run_dir(state["run_id"]))
@@ -139,9 +174,14 @@ class RunStore:
 
     def list_runs(self) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
-        for progress_path in self.root.glob("*/progress.md"):
+        run_dirs = {
+            path.parent for path in self.root.glob("*/events.jsonl")
+        } | {
+            path.parent for path in self.root.glob("*/progress.md")
+        }
+        for run_dir in run_dirs:
             try:
-                results.append(self.load(progress_path.parent.name))
+                results.append(self.load(run_dir.name))
             except FileNotFoundError:
                 continue
         return sorted(results, key=lambda item: item.get("created_at", ""), reverse=True)

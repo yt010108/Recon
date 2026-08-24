@@ -51,6 +51,30 @@ class RunnerSelectionTests(unittest.TestCase):
         called, _state = self._run()
         self.assertEqual(called, ["collect", "probe", "crawl", "discovery"])
 
+    def test_failed_tool_is_preserved_in_overall_status(self) -> None:
+        store, state = self._created_run()
+        runner = HarnessRunner(store)
+        for stage in ("collect", "probe", "crawl"):
+            state["stages"][stage]["status"] = "completed"
+        store.save(state)
+
+        with (
+            patch.object(runner, "_backend_for_tool", return_value=object()),
+            patch("recon_harness.runner.DeepDiscoveryToolRunner") as tools,
+        ):
+            tools.return_value.run.side_effect = [
+                ToolOutcome(0, "url discovery", 1),
+                ToolOutcome(1, "gobuster failed", 0, error="failed"),
+                ToolOutcome(0, "parameth", 1),
+            ]
+            finished = runner.run_stage(state["run_id"], "discovery")
+
+        self.assertEqual(
+            finished["stages"]["discovery"]["status"],
+            "completed_with_errors",
+        )
+        self.assertEqual(finished["status"], "completed_with_errors")
+
     def test_one_stage_can_run_without_previous_stage(self) -> None:
         store, state = self._created_run()
         runner = HarnessRunner(store)

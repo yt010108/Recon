@@ -110,10 +110,13 @@ class RunStore:
             ),
             "complete",
         )
+        scope = state["scope"]
+        target = scope.get("target_label") or scope.get("base_url") or scope.get("name") or "-"
         lines = [
             f"# Recon progress: {state['run_id']}",
             "",
-            f"- Target: `{state['scope']['base_url']}`",
+            f"- Target: `{target}`",
+            f"- Mode: `{scope.get('mode', 'internet')}`",
             f"- Status: `{state['status']}`",
             f"- Updated: `{state['updated_at']}`",
             f"- Artifacts: `{len(state['artifacts'])}`",

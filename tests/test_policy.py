@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from recon_harness.cli import render_scope_toml
-from recon_harness.models import STAGE_ORDER, stage_for_tool, tools_for_stage
+from recon_harness.models import STAGE_ORDER, TOOL_NAMES, stage_for_tool, tools_for_stage
 from recon_harness.policy import PolicyError, ScopePolicy
 
 
@@ -48,6 +48,10 @@ class ScopePolicyTests(unittest.TestCase):
         self.assertEqual(stage_for_tool("httpx"), "probe")
         self.assertEqual(stage_for_tool("nuclei"), "probe")
         self.assertEqual(stage_for_tool("source_comments"), "crawl")
+        self.assertIn("url_discovery", tools_for_stage("discovery"))
+        self.assertNotIn("url_discovery", TOOL_NAMES)
+        with self.assertRaises(ValueError):
+            stage_for_tool("url_discovery")
         self.assertNotIn("nuclei", tools_for_stage("probe"))
 
     def test_pi_scope_contains_only_domain(self) -> None:

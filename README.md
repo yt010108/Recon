@@ -19,7 +19,7 @@ Pi에서 `/recon`을 입력하면 허용 도메인 하나만 묻고 바로 실�
 | collect | Dorkgen, Subfinder, Assetfinder, Amass passive, Waybackurls |
 | probe | HTTPX, `robots.txt` |
 | crawl | Katana, HTML/CSS/JS 주석·엔드포인트 수집 |
-| discovery | Gobuster dir, Parameth |
+| discovery | 출처 통합 URL 큐·최대 2회 재확인, Gobuster dir, Parameth |
 
 Nuclei는 전체 리콘에서 제외했다. 필요할 때 기존 run에 단독 실행하며 결과는 같은 `report.md`에 포함된다. 별도 [Dockerfile.nuclei](docker/Dockerfile.nuclei) 이미지에서 Nuclei `v3.11.1`과 템플릿 `v10.4.7`을 사용하고, 하네스가 템플릿 종류·태그·리다이렉트·Interactsh·속도·동시성을 제한하지 않는다.
 
@@ -36,6 +36,12 @@ runs/<RUN_ID>/
 ├── parsed/
 └── screenshots/
 ```
+
+Wayback·robots.txt·Katana·source 결과는 출처를 보존한 `parsed/url-queue.jsonl`로 합친다.
+새 in-scope URL만 HTTPX로 확인하고, 새 live origin과 HTML 후보만 Katana에 최대 2회
+다시 넣는다. 실패한 명령은 같은 round에서 재시도하며, 새 항목이 없으면 즉시 끝낸다.
+큐는 전체 1,000개·origin별 100개, Katana seed는 run 전체에서 origin별 3개로 제한하고
+재확인 Katana는 동시 요청 1개·초당 5개로 실행한다.
 
 `scope.toml`은 최소 입력만 저장한다.
 

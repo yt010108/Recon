@@ -54,6 +54,13 @@ def _urls(run_dir, base_url: str) -> list[str]:
     values: set[str] = set()
     for name in ("wayback-urls.txt", "alive-urls.txt", "katana-urls.txt"):
         values.update(_lines(run_dir / "parsed" / name))
+    for line in _lines(run_dir / "parsed" / "url-queue.jsonl"):
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict) and item.get("url"):
+            values.add(str(item["url"]))
     for item in _json(run_dir / "parsed" / "gobuster-dir.json", []):
         if item.get("path"):
             values.add(urljoin(base_url.rstrip("/") + "/", str(item["path"]).lstrip("/")))

@@ -33,7 +33,8 @@ class RunStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             store = RunStore(temporary)
             state = store.create(policy.path, policy.snapshot())
-            (store.run_dir(state["run_id"]) / "parsed" / "source-comments.json").write_text(
+            run_dir = store.run_dir(state["run_id"])
+            (run_dir / "parsed" / "source-comments.json").write_text(
                 json.dumps(
                     [
                         {
@@ -46,17 +47,28 @@ class RunStoreTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (store.run_dir(state["run_id"]) / "parsed" / "hosts.txt").write_text(
+            (run_dir / "parsed" / "hosts.txt").write_text(
                 "recon-juice-shop\n", encoding="utf-8"
             )
-            (store.run_dir(state["run_id"]) / "parsed" / "katana-urls.txt").write_text(
+            (run_dir / "parsed" / "katana-urls.txt").write_text(
                 "http://recon-juice-shop:3000/api/orders?id=1\n",
                 encoding="utf-8",
             )
-            (store.run_dir(state["run_id"]) / "parsed" / "google-dorks.txt").write_text(
+            (run_dir / "parsed" / "url-queue.jsonl").write_text(
+                json.dumps(
+                    {
+                        "url": "http://recon-juice-shop:3000/admin?debug=1",
+                        "sources": ["robots"],
+                        "status": "queued",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "parsed" / "google-dorks.txt").write_text(
                 "site:recon-juice-shop\n", encoding="utf-8"
             )
-            (store.run_dir(state["run_id"]) / "parsed" / "nuclei-findings.json").write_text(
+            (run_dir / "parsed" / "nuclei-findings.json").write_text(
                 json.dumps(
                     [
                         {
@@ -77,6 +89,7 @@ class RunStoreTests(unittest.TestCase):
             self.assertTrue(any(item["path"] == "report.md" for item in loaded["artifacts"]))
             text = report.read_text(encoding="utf-8")
             self.assertIn("http://recon-juice-shop:3000", text)
+            self.assertIn("http://recon-juice-shop:3000/admin?debug=1", text)
             self.assertIn("## 주요 엔드포인트", text)
             self.assertIn("## 우선 검토할 입력 지점", text)
             self.assertIn("조회·식별자 입력", text)

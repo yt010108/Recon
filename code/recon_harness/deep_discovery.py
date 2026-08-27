@@ -415,6 +415,13 @@ def _sourcemap_sources(body: str) -> tuple[list[str], list[str]]:
 class DeepDiscoveryToolRunner(ToolRunner):
     """기본 ToolRunner에 깊은 크롤링과 정적 프런트엔드 자산 추적을 추가한다."""
 
+    def run_url_discovery(
+        self, policy: ScopePolicy, state: dict[str, Any]
+    ) -> ToolOutcome:
+        from .discovery import DiscoveryRunner
+
+        return DiscoveryRunner(self, self.store).run(policy, state)
+
     def run_katana(self, policy: ScopePolicy, state: dict[str, Any]) -> ToolOutcome:
         remote = self._copy_lines_input(state, "katana-input.txt", self._live_urls(policy, state))
         args = [

@@ -90,12 +90,16 @@ class CompetitionAdapterTests(unittest.TestCase):
         self.store = RunStore(root / "runs")
         self.state = self.store.create(self.scope_path, self.policy.snapshot())
 
-    def test_network_discovery_parses_only_scoped_open_ports(self) -> None:
+    def test_network_discovery_parses_service_product_and_version(self) -> None:
         xml = """<?xml version="1.0"?>
 <nmaprun>
   <host><status state="up"/><address addr="10.20.30.5" addrtype="ipv4"/>
     <ports>
-      <port protocol="tcp" portid="80"><state state="open"/><service name="http"/></port>
+      <port protocol="tcp" portid="80"><state state="open"/>
+        <service name="http" product="nginx" version="1.24.0" extrainfo="Ubuntu" method="probed" conf="10">
+          <cpe>cpe:/a:igor_sysoev:nginx:1.24.0</cpe>
+        </service>
+      </port>
       <port protocol="tcp" portid="8080"><state state="open"/><service name="http-proxy"/></port>
     </ports>
   </host>
@@ -116,8 +120,65 @@ class CompetitionAdapterTests(unittest.TestCase):
             ("10.20.30.5", 80),
             ("10.20.30.5", 8080),
         })
+        nginx = next(item for item in services if item["port"] == 80)
+        self.assertEqual(nginx["product"], "nginx")
+        self.assertEqual(nginx["version"], "1.24.0")
+        self.assertEqual(nginx["confidence"], 10)
+        self.assertIn("cpe:/a:igor_sysoev:nginx:1.24.0", nginx["cpes"])
+        self.assertIn("nginx 1.24.0", nginx["service"])
         self.assertIn("-sT", backend.commands[0])
+        self.assertIn("-sV", backend.commands[0])
+        self.assertIn("--version-light", backend.commands[0])
         self.assertIn("--open", backend.commands[0])
+        self.assertTrue((run_dir / "parsed" / "service-inventory.json").is_file())
+
+    def test_httpx_enriches_service_inventory_with_web_stack(self) -> None:
+        run_dir = self.store.run_dir(self.state["run_id"])
+        services = [
+            {
+                "host": "10.20.30.5",
+                "port": 8080,
+                "protocol": "tcp",
+                "service_name": "http",
+                "service": "http — Apache Tomcat 9.0.89",
+                "product": "Apache Tomcat",
+                "version": "9.0.89",
+                "extra_info": "",
+                "confidence": 10,
+                "cpes": [],
+                "evidence": "raw/network_discovery.xml",
+            }
+        ]
+        (run_dir / "parsed" / "network-services.json").write_text(
+            json.dumps(services), encoding="utf-8"
+        )
+        record = {
+            "url": "http://10.20.30.5:8080",
+            "status_code": 200,
+            "title": "Admin Portal",
+            "webserver": "Apache-Coyote/1.1",
+            "tech": ["Java", "Spring", "Bootstrap"],
+        }
+        backend = FakeBackend(CommandResult(0, json.dumps(record) + "\n", ""))
+        CompetitionToolRunner(backend, self.store).run_httpx(self.policy, self.state)
+
+        inventory = json.loads(
+            (run_dir / "parsed" / "service-inventory.json").read_text(encoding="utf-8")
+        )
+        item = inventory[0]
+        self.assertEqual(item["web_server"], "Apache-Coyote/1.1")
+        self.assertEqual(item["technologies"], ["Java", "Spring", "Bootstrap"])
+        self.assertEqual(item["title"], "Admin Portal")
+        self.assertEqual(item["http_status"], 200)
+        self.assertIn("Apache Tomcat 9.0.89", item["service"])
+        self.assertIn("server=Apache-Coyote/1.1", item["service"])
+        self.assertIn("-server", backend.commands[0])
+
+        web = json.loads(
+            (run_dir / "parsed" / "web-fingerprints.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(web[0]["web_server"], "Apache-Coyote/1.1")
+        self.assertIn("Spring", web[0]["technologies"])
 
     def test_katana_scope_is_restricted_to_confirmed_origins(self) -> None:
         run_dir = self.store.run_dir(self.state["run_id"])

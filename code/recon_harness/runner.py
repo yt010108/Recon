@@ -1,9 +1,10 @@
-"""네 단계와 개별 도구를 실행한다."""
+"""모드별 네 단계와 개별 도구를 실행한다."""
 
 from __future__ import annotations
 
 from typing import Any
 
+from .competition_tools import CompetitionToolRunner
 from .deep_discovery import DeepDiscoveryToolRunner
 from .docker_backend import NUCLEI_IMAGE, DockerBackend
 from .models import LOCAL_TOOLS, STAGE_ORDER, stage_for_tool, tools_for_stage, validate_stage
@@ -31,6 +32,13 @@ class HarnessRunner:
         )
         backend.require_ready()
         return backend
+
+    def _tool_runner(
+        self, policy: ScopePolicy, run_id: str, tool: str
+    ) -> DeepDiscoveryToolRunner:
+        backend = self._backend_for_tool(policy, run_id, tool)
+        runner_type = CompetitionToolRunner if policy.mode == "competition" else DeepDiscoveryToolRunner
+        return runner_type(backend, self.store)
 
     def _run_stage(
         self, run_id: str, stage: str, *, require_previous: bool = True
@@ -64,15 +72,13 @@ class HarnessRunner:
         self.store.save(state)
         failures = 0
         try:
-            for tool in tools_for_stage(normalized):
+            for tool in tools_for_stage(normalized, policy.mode):
                 if stage_state["tools"].get(tool, {}).get("status") == "completed":
                     continue
                 outcome = (
                     run_local_dorkgen(policy, state, self.store)
                     if tool in LOCAL_TOOLS
-                    else DeepDiscoveryToolRunner(
-                        self._backend_for_tool(policy, run_id, tool), self.store
-                    ).run(tool, policy, state)
+                    else self._tool_runner(policy, run_id, tool).run(tool, policy, state)
                 )
                 tool_status = "skipped" if outcome.skipped else (
                     "completed" if outcome.exit_code == 0 else "failed"
@@ -98,9 +104,9 @@ class HarnessRunner:
         stage_state["status"] = "completed_with_errors" if failures else "completed"
         stage_state["finished_at"] = utc_now()
         completed = all(
-            state["stages"][stage]["status"]
+            state["stages"][item]["status"]
             in {"completed", "completed_with_errors", "skipped"}
-            for stage in STAGE_ORDER
+            for item in STAGE_ORDER
         )
         state["status"] = "completed" if completed else "ready"
         self.store.save(state)
@@ -112,32 +118,37 @@ class HarnessRunner:
 
     def run_tool(self, run_id: str, tool: str) -> dict[str, Any]:
         """선택한 도구 하나만 실행하고 같은 run에 결과를 누적한다."""
-        stage = stage_for_tool(tool)
         state = self.store.load(run_id)
         policy = self.policy_for_run(state)
+        stage = stage_for_tool(tool, policy.mode)
 
-        backend = (
-            None
-            if tool in LOCAL_TOOLS
-            else self._backend_for_tool(policy, run_id, tool)
-        )
         stage_state = state["stages"][stage]
-        stage_state.update({"status": "running", "started_at": stage_state["started_at"] or utc_now(), "error": None})
+        stage_state.update({
+            "status": "running",
+            "started_at": stage_state["started_at"] or utc_now(),
+            "error": None,
+        })
         state["status"] = "running"
         self.store.save(state)
         try:
             outcome = (
                 run_local_dorkgen(policy, state, self.store)
-                if tool == "dorkgen"
-                else DeepDiscoveryToolRunner(backend, self.store).run(tool, policy, state)
+                if tool in LOCAL_TOOLS
+                else self._tool_runner(policy, run_id, tool).run(tool, policy, state)
             )
         except (Exception, KeyboardInterrupt) as exc:
-            stage_state.update({"status": "failed", "finished_at": utc_now(), "error": str(exc)})
+            stage_state.update({
+                "status": "failed",
+                "finished_at": utc_now(),
+                "error": str(exc),
+            })
             state["status"] = "failed"
             self.store.save(state)
             raise
 
-        status = "skipped" if outcome.skipped else ("completed" if outcome.exit_code == 0 else "failed")
+        status = "skipped" if outcome.skipped else (
+            "completed" if outcome.exit_code == 0 else "failed"
+        )
         stage_state["tools"][tool] = {
             "status": status,
             "exit_code": outcome.exit_code,
@@ -145,7 +156,7 @@ class HarnessRunner:
             "item_count": outcome.item_count,
             "error": outcome.error,
         }
-        enabled = list(tools_for_stage(stage))
+        enabled = list(tools_for_stage(stage, policy.mode))
         recorded = [stage_state["tools"].get(name, {}).get("status") for name in enabled]
         if all(value in {"completed", "skipped"} for value in recorded):
             stage_state["status"] = "completed"

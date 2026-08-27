@@ -38,10 +38,12 @@ recon-harness start example.com
 
 | 단계 | 도구 |
 |---|---|
-| collect | Nmap TCP connect scan (`network_discovery`) |
-| probe | HTTPX, `robots.txt` |
+| collect | Nmap TCP connect + light service/version detection (`network_discovery`) |
+| probe | HTTPX status/title/web server/technology fingerprint, `robots.txt` |
 | crawl | Katana, HTML/CSS/JS 주석·API·manifest·sourcemap 수집 |
 | discovery | 각 활성 웹 origin에 Gobuster dir, Parameth |
+
+`network_discovery`는 `-sV --version-light`로 허용 포트의 서비스 이름, product, version, extra info, CPE와 Nmap detection confidence를 기록한다. HTTPX 결과는 같은 `host:port`에 합쳐 web server, title, HTTP status, detected technologies를 `service-inventory.json`에 보강한다.
 
 기본 포트는 흔한 웹 서비스 포트 집합이다. 대회가 별도 포트를 지정하면 `--ports`로 명시한다.
 
@@ -99,14 +101,18 @@ Competition 모드에서는 추가로 다음 파일을 만든다.
 ```text
 parsed/hosts.txt
 parsed/network-services.json
+parsed/service-inventory.json
 parsed/alive-urls.txt
 parsed/httpx.json
+parsed/web-fingerprints.json
 parsed/katana-urls.txt
 parsed/source-endpoints.json
 parsed/gobuster-dir.json
 parsed/parameth.json
 parsed/attack-surface.json
 ```
+
+`service-inventory.json`은 비웹 서비스를 포함한 포트별 통합 inventory다. 가능한 경우 `service_name`, `product`, `version`, `extra_info`, `cpes`, `confidence`, `web_server`, `technologies`, `title`, `http_status`, `web_url`을 포함한다. `web-fingerprints.json`은 HTTPX가 실제 웹으로 확인한 origin만 간단히 정규화한 파일이다.
 
 ## CLI
 

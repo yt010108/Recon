@@ -23,6 +23,81 @@ def _origin(value: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
 
 
+def _service_display(item: dict[str, Any]) -> str:
+    name = str(item.get("service_name") or item.get("service") or "").strip()
+    product = str(item.get("product") or "").strip()
+    version = str(item.get("version") or "").strip()
+    extra = str(item.get("extra_info") or "").strip()
+    product_text = " ".join(value for value in (product, version) if value)
+    if extra:
+        product_text = f"{product_text} ({extra})" if product_text else extra
+    if name and product_text:
+        return f"{name} — {product_text}"
+    return name or product_text
+
+
+def _technology_list(record: dict[str, Any]) -> list[str]:
+    value = record.get("tech") or record.get("technologies") or []
+    if isinstance(value, str):
+        values = [item.strip() for item in value.split(",") if item.strip()]
+    elif isinstance(value, list):
+        values = [str(item).strip() for item in value if str(item).strip()]
+    else:
+        values = []
+    return list(dict.fromkeys(values))
+
+
+def _web_server(record: dict[str, Any]) -> str:
+    for key in ("webserver", "web_server", "server"):
+        value = record.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _merge_web_fingerprints(
+    services: list[dict[str, Any]], records: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Nmap 서비스 결과에 HTTPX 웹 서버/기술 정보를 같은 host:port 기준으로 합친다."""
+    merged = [dict(item) for item in services]
+    by_key: dict[tuple[str, int], dict[str, Any]] = {}
+    for item in merged:
+        try:
+            key = (str(item.get("host") or ""), int(item.get("port") or 0))
+        except (TypeError, ValueError):
+            continue
+        by_key[key] = item
+
+    for record in records:
+        url = str(record.get("url") or "")
+        parsed = urlsplit(url)
+        if not parsed.hostname:
+            continue
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        item = by_key.get((parsed.hostname, port))
+        if item is None:
+            continue
+        technologies = _technology_list(record)
+        web_server = _web_server(record)
+        item.update(
+            {
+                "web_url": url,
+                "http_status": record.get("status_code"),
+                "title": record.get("title"),
+                "web_server": web_server,
+                "technologies": technologies,
+            }
+        )
+        if parsed.scheme == "https":
+            item["tls"] = True
+        display = _service_display(item)
+        if web_server and web_server.lower() not in display.lower():
+            display = f"{display}; server={web_server}" if display else f"server={web_server}"
+        item["service"] = display
+
+    return sorted(merged, key=lambda item: (str(item.get("host")), int(item.get("port") or 0)))
+
+
 class CompetitionToolRunner(DeepDiscoveryToolRunner):
     """인터넷 OSINT 대신 명시된 IPv4/CIDR 안에서 웹 표면을 빠르게 만든다."""
 
@@ -61,6 +136,8 @@ class CompetitionToolRunner(DeepDiscoveryToolRunner):
                 "-n",
                 "-Pn",
                 "-sT",
+                "-sV",
+                "--version-light",
                 "--open",
                 "-T4",
                 "-p",
@@ -70,7 +147,7 @@ class CompetitionToolRunner(DeepDiscoveryToolRunner):
                 "-oX",
                 "-",
             ],
-            process_timeout=900,
+            process_timeout=1200,
         )
         self._write_result(state, "network_discovery", result, extension="xml")
 
@@ -108,19 +185,44 @@ class CompetitionToolRunner(DeepDiscoveryToolRunner):
                             continue
                         if port not in policy.allowed_ports:
                             continue
+
                         protocol = port_node.attrib.get("protocol", "tcp")
                         service_node = port_node.find("service")
                         service_name = service_node.attrib.get("name", "") if service_node is not None else ""
+                        product = service_node.attrib.get("product", "") if service_node is not None else ""
+                        version = service_node.attrib.get("version", "") if service_node is not None else ""
+                        extra_info = service_node.attrib.get("extrainfo", "") if service_node is not None else ""
+                        tunnel = service_node.attrib.get("tunnel", "") if service_node is not None else ""
+                        method = service_node.attrib.get("method", "") if service_node is not None else ""
+                        try:
+                            confidence = int(service_node.attrib.get("conf", "0")) if service_node is not None else 0
+                        except ValueError:
+                            confidence = 0
+                        cpes = []
+                        if service_node is not None:
+                            cpes = [
+                                str(node.text).strip()
+                                for node in service_node.findall("cpe")
+                                if node.text and str(node.text).strip()
+                            ]
+
                         hosts.add(address)
-                        services.append(
-                            {
-                                "host": address,
-                                "port": port,
-                                "protocol": protocol,
-                                "service": service_name,
-                                "evidence": "raw/network_discovery.xml",
-                            }
-                        )
+                        item: dict[str, Any] = {
+                            "host": address,
+                            "port": port,
+                            "protocol": protocol,
+                            "service_name": service_name,
+                            "product": product,
+                            "version": version,
+                            "extra_info": extra_info,
+                            "tunnel": tunnel,
+                            "detection_method": method,
+                            "confidence": confidence,
+                            "cpes": cpes,
+                            "evidence": "raw/network_discovery.xml",
+                        }
+                        item["service"] = _service_display(item)
+                        services.append(item)
 
         run_dir = self.store.run_dir(state["run_id"])
         hosts_path = run_dir / "parsed" / "hosts.txt"
@@ -130,15 +232,16 @@ class CompetitionToolRunner(DeepDiscoveryToolRunner):
             newline="\n",
         )
         services_path = run_dir / "parsed" / "network-services.json"
-        atomic_write_json(
-            services_path,
-            sorted(services, key=lambda item: (item["host"], item["port"])),
-        )
+        sorted_services = sorted(services, key=lambda item: (item["host"], item["port"]))
+        atomic_write_json(services_path, sorted_services)
+        inventory_path = run_dir / "parsed" / "service-inventory.json"
+        atomic_write_json(inventory_path, sorted_services)
         self.store.add_artifact(state, hosts_path, "hosts", "network_discovery")
         self.store.add_artifact(state, services_path, "services", "network_discovery")
+        self.store.add_artifact(state, inventory_path, "service-inventory", "network_discovery")
         return ToolOutcome(
             result.exit_code,
-            f"Found {len(hosts)} hosts with {len(services)} open scoped ports",
+            f"Fingerprint {len(services)} scoped services across {len(hosts)} hosts",
             len(services),
             error=result.stderr.strip(),
         )
@@ -178,6 +281,7 @@ class CompetitionToolRunner(DeepDiscoveryToolRunner):
                 "-sc",
                 "-title",
                 "-td",
+                "-server",
                 "-duc",
             ],
             process_timeout=600,
@@ -209,11 +313,39 @@ class CompetitionToolRunner(DeepDiscoveryToolRunner):
         )
         details = run_dir / "parsed" / "httpx.json"
         atomic_write_json(details, records)
+
+        normalized_web = []
+        for record in records:
+            url = str(record.get("url") or "")
+            parsed = urlsplit(url)
+            normalized_web.append(
+                {
+                    "url": url,
+                    "host": parsed.hostname,
+                    "port": parsed.port or (443 if parsed.scheme == "https" else 80),
+                    "scheme": parsed.scheme,
+                    "status_code": record.get("status_code"),
+                    "title": record.get("title"),
+                    "web_server": _web_server(record),
+                    "technologies": _technology_list(record),
+                }
+            )
+        web_fingerprints = run_dir / "parsed" / "web-fingerprints.json"
+        atomic_write_json(web_fingerprints, normalized_web)
+
+        service_list = services if isinstance(services, list) else []
+        inventory = _merge_web_fingerprints(service_list, records)
+        atomic_write_json(services_path, inventory)
+        inventory_path = run_dir / "parsed" / "service-inventory.json"
+        atomic_write_json(inventory_path, inventory)
+
         self.store.add_artifact(state, alive, "urls", "httpx")
         self.store.add_artifact(state, details, "parsed", "httpx")
+        self.store.add_artifact(state, web_fingerprints, "web-fingerprints", "httpx")
+        self.store.add_artifact(state, inventory_path, "service-inventory", "httpx")
         return ToolOutcome(
             result.exit_code,
-            f"Confirmed {len(set(urls))} live in-scope web services",
+            f"Confirmed {len(set(urls))} live web services and enriched service fingerprints",
             len(set(urls)),
             error=result.stderr.strip(),
         )

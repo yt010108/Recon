@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urljoin, urlsplit, urlunsplit
 
 from .docker_backend import CommandResult, DockerBackend
 from .policy import PolicyError, ScopePolicy
@@ -172,19 +173,139 @@ def _extract_html_comments(source: str) -> list[dict[str, Any]]:
 # 이미 받은 소스만 검사한다. 이 패턴들은 새 URL에 요청을 보내지 않는다.
 _ENDPOINT_PATTERNS = (
     ("api-path", re.compile(r'''["'`]((?:/(?:api|rest|graphql|v\d+))(?:[/?][^"'`\s<>\\]*)?)["'`]''', re.IGNORECASE)),
-    ("request", re.compile(r'''(?:fetch|axios(?:\.(?:get|post|put|patch|delete))?)\s*\(\s*["'`]((?:https?://|/)[^"'`\s<>\\]+)["'`]''', re.IGNORECASE)),
-    ("form-action", re.compile(r'''\baction\s*=\s*["'`]([^"'`\s<>]+)["'`]''', re.IGNORECASE)),
+    ("request", re.compile(r'''(fetch|axios(?:\.(?:get|post|put|patch|delete|request))?)\s*\(\s*["'`]((?:https?://|/)[^"'`\s<>\\]+)["'`]''', re.IGNORECASE)),
     ("action-id", re.compile(r'''\b(?:action[-_]?id|next-action)\b\s*[:=]\s*["'`]([^"'`\s<>]+)["'`]''', re.IGNORECASE)),
 )
 
 
+class _FormParser(HTMLParser):
+    """HTML form의 전송 위치와 named control을 네트워크 요청 없이 수집한다."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.forms: list[dict[str, Any]] = []
+        self.current: dict[str, Any] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = {name.lower(): value or "" for name, value in attrs}
+        lowered = tag.lower()
+        if lowered == "form":
+            method = values.get("method", "GET").strip().upper() or "GET"
+            self.current = {
+                "kind": "form-action",
+                "value": values.get("action", "").strip(),
+                "method": method,
+                "content_type": values.get("enctype", "application/x-www-form-urlencoded"),
+                "line": self.getpos()[0],
+                "context": self.get_starttag_text() or "<form>",
+                "form_fields": [],
+            }
+            self.forms.append(self.current)
+            return
+        if self.current is None or lowered not in {"input", "select", "textarea", "button"}:
+            return
+        name = values.get("name", "").strip()
+        if not name:
+            return
+        self.current["form_fields"].append(
+            {
+                "name": name,
+                "type": values.get("type", lowered).strip().lower() or lowered,
+                "required": "required" in values,
+            }
+        )
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "form":
+            self.current = None
+
+
+def _extract_html_forms(source: str) -> list[dict[str, Any]]:
+    parser = _FormParser()
+    try:
+        parser.feed(source)
+    except Exception:
+        return []
+    for form in parser.forms:
+        names = list(dict.fromkeys(str(item["name"]) for item in form["form_fields"]))
+        if form["method"] == "GET":
+            form["query_parameters"] = names
+            form["body_parameters"] = []
+        else:
+            form["query_parameters"] = []
+            form["body_parameters"] = names
+    return parser.forms
+
+
+def _request_metadata(source: str, match: re.Match[str], call: str, value: str) -> dict[str, Any]:
+    """일반적인 fetch/Axios 호출에서 보수적으로 메서드와 입력 키를 추출한다."""
+    lowered = call.lower()
+    method = "GET"
+    if "." in lowered and lowered.rsplit(".", 1)[1] != "request":
+        method = lowered.rsplit(".", 1)[1].upper()
+
+    # 한 호출의 가까운 옵션만 본다. 전체 파일을 대상으로 하면 다른 요청의 키가 섞인다.
+    tail = source[match.end() : match.end() + 1200]
+    close = tail.find(");")
+    if close >= 0:
+        tail = tail[:close]
+    method_match = re.search(
+        r'''\bmethod\s*:\s*["'](GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)["']''',
+        tail,
+        flags=re.IGNORECASE,
+    )
+    if method_match:
+        method = method_match.group(1).upper()
+
+    content_type = ""
+    content_type_match = re.search(
+        r'''["']?content-type["']?\s*:\s*["']([^"']+)["']''',
+        tail,
+        flags=re.IGNORECASE,
+    )
+    if content_type_match:
+        content_type = content_type_match.group(1).strip()
+
+    body_region = ""
+    body_match = re.search(
+        r'''\b(?:body|data)\s*:\s*(?:JSON\.stringify\s*\()?\s*\{(.*?)\}''',
+        tail,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if body_match:
+        body_region = body_match.group(1)
+    elif method in {"POST", "PUT", "PATCH"} and lowered.startswith("axios."):
+        payload_match = re.search(r'''^\s*,\s*\{(.*?)\}''', tail, flags=re.DOTALL)
+        if payload_match:
+            body_region = payload_match.group(1)
+    body_parameters = list(
+        dict.fromkeys(
+            match.group(1) or match.group(2)
+            for match in re.finditer(
+                r'''(?:^|,)\s*(?:["']([^"']+)["']|([A-Za-z_$][\w$]*))\s*:''',
+                body_region,
+            )
+        )
+    )
+    query_parameters = list(
+        dict.fromkeys(name for name, _ in parse_qsl(urlsplit(value).query, keep_blank_values=True))
+    )
+    return {
+        "method": method,
+        "content_type": content_type,
+        "query_parameters": query_parameters,
+        "body_parameters": body_parameters,
+        "form_fields": [],
+    }
+
+
 def _extract_source_endpoints(source: str) -> list[dict[str, Any]]:
     """소스의 경로와 action ID 후보를 출처 위치와 함께 중복 제거한다."""
-    findings: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = _extract_html_forms(source)
     seen: set[tuple[str, str]] = set()
     for kind, pattern in _ENDPOINT_PATTERNS:
         for match in pattern.finditer(source):
-            value = match.group(1)
+            value = match.group(2) if kind == "request" else match.group(1)
             key = (kind, value)
             if key in seen:
                 continue
@@ -192,14 +313,15 @@ def _extract_source_endpoints(source: str) -> list[dict[str, Any]]:
             line_start = source.rfind("\n", 0, match.start()) + 1
             line_end = source.find("\n", match.end())
             context = source[line_start : len(source) if line_end < 0 else line_end].strip()
-            findings.append(
-                {
-                    "kind": kind,
-                    "value": value,
-                    "line": source.count("\n", 0, match.start()) + 1,
-                    "context": context,
-                }
-            )
+            finding = {
+                "kind": kind,
+                "value": value,
+                "line": source.count("\n", 0, match.start()) + 1,
+                "context": context,
+            }
+            if kind == "request":
+                finding.update(_request_metadata(source, match, match.group(1), value))
+            findings.append(finding)
     return findings
 
 

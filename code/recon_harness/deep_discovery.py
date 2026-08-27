@@ -7,7 +7,7 @@ import re
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urljoin, urlsplit, urlunsplit
 
 from .policy import PolicyError, ScopePolicy
 from .storage import RunStore, atomic_write_json
@@ -244,7 +244,7 @@ def _first_call_argument(source: str, opening_paren: int) -> str:
 def _extract_static_calls(source: str) -> list[dict[str, Any]]:
     bindings = _collect_static_bindings(source)
     findings: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, int]] = set()
     for match in _JS_CALL_RE.finditer(source):
         expr = _first_call_argument(source, match.end() - 1)
         value = _eval_static_string(expr, bindings)
@@ -252,12 +252,68 @@ def _extract_static_calls(source: str) -> list[dict[str, Any]]:
             continue
         call = match.group(1).lower()
         kind = "dynamic-import" if call == "import" else "request-static"
-        key = (kind, value)
+        line, context = _line_context(source, match.start())
+        key = (kind, value, line)
         if key in seen:
             continue
         seen.add(key)
-        line, context = _line_context(source, match.start())
-        findings.append({"kind": kind, "value": value, "line": line, "context": context})
+        finding: dict[str, Any] = {
+            "kind": kind,
+            "value": value,
+            "line": line,
+            "context": context,
+        }
+        if kind == "request-static":
+            method = "GET"
+            if "." in call and call.rsplit(".", 1)[1] != "request":
+                method = call.rsplit(".", 1)[1].upper()
+            tail = source[match.end() : match.end() + 1200]
+            close = tail.find(");")
+            if close >= 0:
+                tail = tail[:close]
+            method_match = re.search(
+                r'''\bmethod\s*:\s*["'](GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)["']''',
+                tail,
+                flags=re.IGNORECASE,
+            )
+            if method_match:
+                method = method_match.group(1).upper()
+            content_type_match = re.search(
+                r'''["']?content-type["']?\s*:\s*["']([^"']+)["']''',
+                tail,
+                flags=re.IGNORECASE,
+            )
+            body_match = re.search(
+                r'''\b(?:body|data)\s*:\s*(?:JSON\.stringify\s*\()?\s*\{(.*?)\}''',
+                tail,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if body_match is None and method in {"POST", "PUT", "PATCH"} and call.startswith("axios."):
+                body_match = re.search(r''',\s*\{(.*?)\}''', tail, flags=re.DOTALL)
+            body_region = body_match.group(1) if body_match else ""
+            body_parameters = list(
+                dict.fromkeys(
+                    key.group(1) or key.group(2)
+                    for key in re.finditer(
+                        r'''(?:^|,)\s*(?:["']([^"']+)["']|([A-Za-z_$][\w$]*))\s*:''',
+                        body_region,
+                    )
+                )
+            )
+            finding.update(
+                {
+                    "method": method,
+                    "content_type": content_type_match.group(1).strip() if content_type_match else "",
+                    "query_parameters": list(
+                        dict.fromkeys(
+                            name for name, _ in parse_qsl(urlsplit(value).query, keep_blank_values=True)
+                        )
+                    ),
+                    "body_parameters": body_parameters,
+                    "form_fields": [],
+                }
+            )
+        findings.append(finding)
     return findings
 
 
@@ -484,7 +540,7 @@ class DeepDiscoveryToolRunner(ToolRunner):
         endpoints: list[dict[str, Any]] = []
         assets: list[dict[str, Any]] = []
         seen_comments: set[tuple[str, int, str, str]] = set()
-        seen_endpoints: set[tuple[str, str, str]] = set()
+        seen_endpoints: set[tuple[str, str, str, str]] = set()
         seen_assets: set[tuple[str, str, str]] = set()
         reviewed_urls: set[str] = set()
         discovered_urls: list[str] = []
@@ -493,10 +549,19 @@ class DeepDiscoveryToolRunner(ToolRunner):
             raw_value = str(value if value is not None else candidate.get("value", ""))
             endpoint = None
             if candidate.get("kind") != "action-id":
-                endpoint = _resolve_in_scope(policy, source_url, raw_value)
+                endpoint = (
+                    source_url
+                    if candidate.get("kind") == "form-action" and not raw_value
+                    else _resolve_in_scope(policy, source_url, raw_value)
+                )
                 if endpoint is None:
                     return
-            key = (source_url, str(candidate.get("kind")), endpoint or raw_value)
+            key = (
+                source_url,
+                str(candidate.get("kind")),
+                endpoint or raw_value,
+                str(candidate.get("method") or ""),
+            )
             if key in seen_endpoints:
                 return
             seen_endpoints.add(key)

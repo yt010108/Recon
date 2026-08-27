@@ -94,7 +94,11 @@ runs/<RUN_ID>/
 
 `report.md`의 `우선 검토할 입력 지점`에는 URL/파라미터뿐 아니라 가능한 경우 발견한 소스 URL과 line 또는 도구 artifact 위치를 함께 표시한다.
 
-`parsed/attack-surface.json`은 후속 agent가 읽기 위한 통합 결과다. scope, 네트워크 서비스, HTTPX 웹 서비스, URL별 role/sink hint/parameter, 발견 provenance, source endpoint/action, Parameth 결과, Nuclei 후보를 포함한다.
+`parsed/attack-surface.json`은 후속 agent가 읽기 위한 통합 결과다. scope, 네트워크 서비스, HTTPX 웹 서비스, URL별 role/sink hint/parameter, 발견 provenance, source endpoint/action, Parameth 결과, Nuclei 후보를 포함한다. HTML form과 정적으로 해석 가능한 fetch/Axios 호출은 `methods`, `query_parameters`, `body_parameters`, `form_fields`, `content_types`로 정규화하며, 각 endpoint에는 근거 기반 `confidence`와 `confidence_reasons`를 기록한다.
+
+sink/role 분류는 경로와 파라미터의 토큰을 정확히 비교한다. 예를 들어 `id`는 `userId`의 camel-case 토큰과는 일치하지만 `/valid`의 부분 문자열은 입력 지점으로 오인하지 않는다.
+
+`parsed/findings.json`은 수동 검증 큐다. 입력이 있거나 상태 변경 메서드를 사용하는 후보를 안정적인 `finding_id`로 관리하고 최초 상태를 `unverified`로 둔다. 보고서를 다시 생성해도 같은 ID의 `status`, `notes`, 요청/응답 artifact와 사용자가 추가한 필드는 보존된다.
 
 Competition 모드에서는 추가로 다음 파일을 만든다.
 
@@ -110,9 +114,14 @@ parsed/source-endpoints.json
 parsed/gobuster-dir.json
 parsed/parameth.json
 parsed/attack-surface.json
+parsed/findings.json
 ```
 
 `service-inventory.json`은 비웹 서비스를 포함한 포트별 통합 inventory다. 가능한 경우 `service_name`, `product`, `version`, `extra_info`, `cpes`, `confidence`, `web_server`, `technologies`, `title`, `http_status`, `web_url`을 포함한다. `web-fingerprints.json`은 HTTPX가 실제 웹으로 확인한 origin만 간단히 정규화한 파일이다.
+
+Competition 모드의 Parameth는 origin만 검사하지 않고, 소스에서 찾은 endpoint와 정적 파일을 제외한 Katana URL을 우선 대상으로 사용한다. 실행 폭주를 막기 위해 한 run에서 최대 60개 endpoint를 검사하며, 정규화한 파라미터 이름을 attack surface와 findings queue에 합친다.
+
+검증 상태 권장 흐름은 `unverified` → `testing` → `confirmed` 또는 `false_positive`다. `findings.json`의 후보는 취약점 확정 결과가 아니므로 실제 제출 전 요청/응답 artifact와 영향도를 수동으로 확인한다.
 
 ## CLI
 

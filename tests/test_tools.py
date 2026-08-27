@@ -48,8 +48,8 @@ def result_with_record(record: dict[str, object]) -> CommandResult:
 
 class ParserTests(unittest.TestCase):
     def test_source_endpoint_patterns_are_extracted_offline(self) -> None:
-        source = """fetch('/api/orders?id=1')
-<form action="/login">
+        source = """fetch('/api/orders?id=1', {method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({status: 'paid', userId: 7})})
+<form action="/login" method="post"><input name="username" required><input name="password" type="password"></form>
 const action_id = 'abc123';
 axios.post("https://example.com/graphql")"""
         findings = _extract_source_endpoints(source)
@@ -63,6 +63,21 @@ axios.post("https://example.com/graphql")"""
                 ("request", "https://example.com/graphql"),
             },
         )
+        fetch = next(item for item in findings if item["kind"] == "request" and item["value"].startswith("/api/orders"))
+        self.assertEqual(fetch["method"], "PATCH")
+        self.assertEqual(fetch["query_parameters"], ["id"])
+        self.assertEqual(fetch["body_parameters"], ["status", "userId"])
+        self.assertEqual(fetch["content_type"], "application/json")
+        form = next(item for item in findings if item["kind"] == "form-action")
+        self.assertEqual(form["method"], "POST")
+        self.assertEqual(form["body_parameters"], ["username", "password"])
+        self.assertTrue(form["form_fields"][0]["required"])
+
+    def test_form_without_action_targets_current_document_later(self) -> None:
+        findings = _extract_source_endpoints('<form><input name="q"></form>')
+        self.assertEqual(findings[0]["value"], "")
+        self.assertEqual(findings[0]["method"], "GET")
+        self.assertEqual(findings[0]["query_parameters"], ["q"])
     def test_response_body_removes_http_headers(self) -> None:
         record = {"response": "HTTP/1.1 200 OK\r\nX-Test: yes\r\n\r\nbody\ntext"}
         self.assertEqual(_response_body(record), "body\ntext")

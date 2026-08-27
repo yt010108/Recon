@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from typing import Any
 from urllib.parse import parse_qsl, urljoin, urlsplit
 
@@ -48,17 +50,30 @@ def _cell(value: Any) -> str:
     return str(value or "-").replace("|", "\\|").replace("\n", " ")
 
 
-def _matches(url: str, hints: dict[str, tuple[str, ...]]) -> list[str]:
-    path = urlsplit(url).path.lower()
-    params = [
-        name.lower()
-        for name, _ in parse_qsl(urlsplit(url).query, keep_blank_values=True)
-    ]
-    values = [path, *params]
+def _tokens(value: str) -> set[str]:
+    camel_split = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value)
+    tokens = {
+        token.lower()
+        for token in re.split(r"[^A-Za-z0-9]+", camel_split)
+        if token
+    }
+    tokens.update(token[:-1] for token in list(tokens) if len(token) > 3 and token.endswith("s"))
+    return tokens
+
+
+def _matches(
+    url: str,
+    hints: dict[str, tuple[str, ...]],
+    extra_values: list[str] | None = None,
+) -> list[str]:
+    parsed = urlsplit(url)
+    values = [parsed.path, *(name for name, _ in parse_qsl(parsed.query, keep_blank_values=True))]
+    values.extend(extra_values or [])
+    tokens = set().union(*(_tokens(value) for value in values)) if values else set()
     return [
         name
         for name, words in hints.items()
-        if any(word in value for value in values for word in words)
+        if any(word.lower() in tokens for word in words)
     ]
 
 
@@ -123,6 +138,19 @@ def _url_evidence(run_dir, base_url: str) -> dict[str, list[dict[str, Any]]]:
             },
         )
 
+    for item in _json(run_dir / "parsed" / "parameth.json", []):
+        if not isinstance(item, dict) or not item.get("target"):
+            continue
+        _add_evidence(
+            mapping,
+            str(item["target"]),
+            {
+                "tool": "parameth",
+                "artifact": str(item.get("evidence") or "parsed/parameth.json"),
+                "parameters": item.get("parameters") or [],
+            },
+        )
+
     return mapping
 
 
@@ -163,21 +191,97 @@ def _attack_surface(
     source_endpoints: list[dict[str, Any]],
     parameter_findings: Any,
 ) -> dict[str, Any]:
-    endpoints: list[dict[str, Any]] = []
-    for url in sorted(evidence):
-        parameters = [
-            name
-            for name, _ in parse_qsl(urlsplit(url).query, keep_blank_values=True)
-        ]
-        endpoints.append(
+    by_url: dict[str, dict[str, Any]] = {}
+
+    def endpoint_for(url: str) -> dict[str, Any]:
+        item = by_url.setdefault(
+            url,
             {
                 "url": url,
-                "roles": _matches(url, ROLE_HINTS),
-                "sink_hints": _matches(url, SINK_HINTS),
-                "parameters": parameters,
-                "evidence": evidence[url],
-            }
+                "methods": [],
+                "query_parameters": [],
+                "body_parameters": [],
+                "form_fields": [],
+                "content_types": [],
+                "evidence": list(evidence.get(url, [])),
+            },
         )
+        return item
+
+    for url in evidence:
+        item = endpoint_for(url)
+        for name, _ in parse_qsl(urlsplit(url).query, keep_blank_values=True):
+            if name not in item["query_parameters"]:
+                item["query_parameters"].append(name)
+
+    for source in source_endpoints:
+        if not isinstance(source, dict) or not source.get("endpoint"):
+            continue
+        url = str(source["endpoint"])
+        item = endpoint_for(url)
+        method = str(source.get("method") or "").upper()
+        if method and method not in item["methods"]:
+            item["methods"].append(method)
+        content_type = str(source.get("content_type") or "").strip()
+        if content_type and content_type not in item["content_types"]:
+            item["content_types"].append(content_type)
+        for key in ("query_parameters", "body_parameters"):
+            values = source.get(key) if isinstance(source.get(key), list) else []
+            for value in values:
+                name = str(value).strip()
+                if name and name not in item[key]:
+                    item[key].append(name)
+        fields = source.get("form_fields") if isinstance(source.get("form_fields"), list) else []
+        for field in fields:
+            if isinstance(field, dict) and field not in item["form_fields"]:
+                item["form_fields"].append(field)
+
+    for finding in parameter_findings if isinstance(parameter_findings, list) else []:
+        if not isinstance(finding, dict) or not finding.get("target"):
+            continue
+        item = endpoint_for(str(finding["target"]))
+        for value in finding.get("parameters", []):
+            name = str(value).strip()
+            if name and name not in item["query_parameters"]:
+                item["query_parameters"].append(name)
+
+    endpoints: list[dict[str, Any]] = []
+    for url, item in sorted(by_url.items()):
+        input_names = [*item["query_parameters"], *item["body_parameters"]]
+        input_names.extend(
+            str(field.get("name") or "")
+            for field in item["form_fields"]
+            if isinstance(field, dict)
+        )
+        item["roles"] = _matches(url, ROLE_HINTS, input_names)
+        item["sink_hints"] = _matches(url, SINK_HINTS, input_names)
+        # 기존 소비자를 위한 전체 파라미터 필드는 유지한다.
+        item["parameters"] = list(dict.fromkeys(input_names))
+
+        score = 0.15
+        reasons = ["scoped endpoint"]
+        if item["evidence"]:
+            score += 0.15
+            reasons.append("discovery evidence")
+        if any(entry.get("source") for entry in item["evidence"] if isinstance(entry, dict)):
+            score += 0.15
+            reasons.append("source provenance")
+        if item["methods"]:
+            score += 0.1
+            reasons.append("HTTP method observed")
+        if any(method in {"POST", "PUT", "PATCH", "DELETE"} for method in item["methods"]):
+            score += 0.1
+            reasons.append("state-changing method")
+        if item["parameters"]:
+            score += 0.15
+            reasons.append("named input")
+        if item["sink_hints"]:
+            score += 0.15
+            reasons.append("sink token")
+        item["confidence"] = round(min(score, 0.95), 2)
+        item["confidence_reasons"] = reasons
+        item["validation_status"] = "unverified"
+        endpoints.append(item)
     return {
         "scope": state["scope"],
         "network_services": network_services,
@@ -187,6 +291,48 @@ def _attack_surface(
         "parameter_findings": parameter_findings,
         "nuclei_findings": nuclei_findings,
     }
+
+
+def _finding_id(url: str) -> str:
+    return "candidate-" + hashlib.sha256(url.encode("utf-8")).hexdigest()[:12]
+
+
+def _merge_findings(run_dir, endpoints: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    existing_raw = _json(run_dir / "parsed" / "findings.json", [])
+    existing = {
+        str(item.get("finding_id")): item
+        for item in existing_raw
+        if isinstance(item, dict) and item.get("finding_id")
+    }
+    findings: list[dict[str, Any]] = []
+    for endpoint in endpoints:
+        methods = [str(value) for value in endpoint.get("methods", [])]
+        candidate_types = [str(value) for value in endpoint.get("sink_hints", [])]
+        has_inputs = bool(endpoint.get("parameters") or endpoint.get("form_fields"))
+        changes_state = any(value in {"POST", "PUT", "PATCH", "DELETE"} for value in methods)
+        if not candidate_types and not has_inputs and not changes_state:
+            continue
+        identifier = _finding_id(str(endpoint["url"]))
+        previous = existing.get(identifier, {})
+        finding = {
+            **previous,
+            "finding_id": identifier,
+            "status": previous.get("status", "unverified"),
+            "url": endpoint["url"],
+            "methods": methods,
+            "candidate_types": candidate_types,
+            "confidence": endpoint.get("confidence", 0),
+            "confidence_reasons": endpoint.get("confidence_reasons", []),
+            "parameters": endpoint.get("parameters", []),
+            "evidence": endpoint.get("evidence", []),
+            "notes": previous.get("notes", ""),
+            "request_artifact": previous.get("request_artifact"),
+            "response_artifact": previous.get("response_artifact"),
+        }
+        endpoint["finding_id"] = identifier
+        endpoint["validation_status"] = finding["status"]
+        findings.append(finding)
+    return sorted(findings, key=lambda item: (-float(item["confidence"]), str(item["url"])))
 
 
 def build_report(store: RunStore, state: dict[str, Any]):
@@ -212,19 +358,6 @@ def build_report(store: RunStore, state: dict[str, Any]):
         nuclei_findings = []
 
     evidence = _url_evidence(run_dir, base_url)
-    urls = sorted(evidence)
-    endpoints = [(url, _matches(url, ROLE_HINTS)) for url in urls]
-    endpoints = [
-        (url, roles or ["일반 웹"])
-        for url, roles in endpoints
-        if roles or urlsplit(url).query
-    ]
-    sinks = [
-        (url, reasons, evidence.get(url, []))
-        for url in urls
-        if (reasons := _matches(url, SINK_HINTS))
-    ]
-
     attack_surface = _attack_surface(
         state,
         services,
@@ -234,9 +367,21 @@ def build_report(store: RunStore, state: dict[str, Any]):
         source_endpoints,
         parameter_findings,
     )
+    surface_endpoints = attack_surface["endpoints"]
+    findings = _merge_findings(run_dir, surface_endpoints)
+    findings_path = run_dir / "parsed" / "findings.json"
+    atomic_write_json(findings_path, findings)
+    store.add_artifact(state, findings_path, "findings-queue", "harness")
+
     attack_surface_path = run_dir / "parsed" / "attack-surface.json"
     atomic_write_json(attack_surface_path, attack_surface)
     store.add_artifact(state, attack_surface_path, "attack-surface", "harness")
+
+    urls = [str(item["url"]) for item in surface_endpoints]
+    endpoints = [
+        item for item in surface_endpoints if item.get("roles") or item.get("parameters")
+    ]
+    sinks = [item for item in surface_endpoints if item.get("finding_id")]
 
     lines = [
         f"# Recon: {target_label}",
@@ -248,7 +393,7 @@ def build_report(store: RunStore, state: dict[str, Any]):
         f"- 활성 웹 서비스: `{len(services)}`",
         f"- 수집 URL: `{len(urls)}`",
         f"- Nuclei 발견 후보: `{len(nuclei_findings)}`",
-        f"- 검토할 입력 지점: `{len(sinks)}`",
+        f"- 검토할 입력 지점: `{len(findings)}`",
         "",
         "## 자산",
         "",
@@ -280,28 +425,32 @@ def build_report(store: RunStore, state: dict[str, Any]):
                 f"`{_cell(item.get('evidence'))}` |"
             )
 
-    lines.extend(["", "## 주요 엔드포인트", "", "| 역할 | URL |", "|---|---|"])
+    lines.extend(["", "## 주요 엔드포인트", "", "| 역할 | 메서드 | URL | 입력 |", "|---|---|---|---|"])
     lines.extend(
-        f"| {_cell(', '.join(roles))} | {_cell(url)} |"
-        for url, roles in endpoints
+        f"| {_cell(', '.join(item.get('roles') or ['일반 웹']))} | "
+        f"{_cell(', '.join(item.get('methods') or []))} | {_cell(item.get('url'))} | "
+        f"{_cell(', '.join(item.get('parameters') or []))} |"
+        for item in endpoints
     )
     if not endpoints:
-        lines.append("| - | 역할을 추정할 엔드포인트 없음 |")
+        lines.append("| - | - | 역할을 추정할 엔드포인트 없음 | - |")
 
     lines.extend([
         "",
         "## 소스에서 찾은 경로와 액션",
         "",
-        "| 유형 | 값 | 출처 |",
-        "|---|---|---|",
+        "| 유형 | 메서드 | 값 | 입력 | 출처 |",
+        "|---|---|---|---|---|",
     ])
     for item in source_endpoints:
         lines.append(
-            f"| {_cell(item.get('kind'))} | {_cell(item.get('endpoint') or item.get('value'))} | "
+            f"| {_cell(item.get('kind'))} | {_cell(item.get('method'))} | "
+            f"{_cell(item.get('endpoint') or item.get('value'))} | "
+            f"{_cell(', '.join([*(item.get('query_parameters') or []), *(item.get('body_parameters') or [])]))} | "
             f"{_cell(item.get('source'))}:{_cell(item.get('line'))} |"
         )
     if not source_endpoints:
-        lines.append("| - | 발견된 후보 없음 | - |")
+        lines.append("| - | - | 발견된 후보 없음 | - | - |")
 
     severity_order = {
         "critical": 0,
@@ -342,21 +491,21 @@ def build_report(store: RunStore, state: dict[str, Any]):
         "",
         "## 우선 검토할 입력 지점",
         "",
-        "경로명과 쿼리 파라미터에 따른 후보이며 취약점 판정이 아니다. 발견 위치는 후보가 어떤 도구/소스에서 들어왔는지 보여준다.",
+        "토큰, 관찰된 메서드와 named input에 따른 검증 큐이며 취약점 판정이 아니다.",
         "",
-        "| 후보 유형 | URL | 파라미터 | 발견 위치 |",
-        "|---|---|---|---|",
+        "| ID | 상태 | 신뢰도 | 후보 유형 | 메서드 | URL | 파라미터 | 발견 위치 |",
+        "|---|---|---:|---|---|---|---|---|",
     ])
-    for url, reasons, sink_evidence in sinks:
-        params = ", ".join(
-            name for name, _ in parse_qsl(urlsplit(url).query, keep_blank_values=True)
-        ) or "-"
+    for item in sinks:
         lines.append(
-            f"| {_cell(', '.join(reasons))} | {_cell(url)} | {_cell(params)} | "
-            f"{_cell(_evidence_label(sink_evidence))} |"
+            f"| {_cell(item.get('finding_id'))} | {_cell(item.get('validation_status'))} | "
+            f"{_cell(item.get('confidence'))} | {_cell(', '.join(item.get('sink_hints') or []))} | "
+            f"{_cell(', '.join(item.get('methods') or []))} | {_cell(item.get('url'))} | "
+            f"{_cell(', '.join(item.get('parameters') or []))} | "
+            f"{_cell(_evidence_label(item.get('evidence') or []))} |"
         )
     if not sinks:
-        lines.append("| - | 발견된 후보 없음 | - | - |")
+        lines.append("| - | - | - | 발견된 후보 없음 | - | - | - | - |")
 
     lines.extend(["", "## Google Dorks", ""])
     if mode == "competition":
@@ -373,6 +522,7 @@ def build_report(store: RunStore, state: dict[str, Any]):
         "",
         "원문은 `raw/`, 정리된 결과는 `parsed/`에 있다.",
         "Agent 입력용 통합 표면은 `parsed/attack-surface.json`에 있다.",
+        "수동 검증 상태와 메모는 `parsed/findings.json`에 있다.",
         "",
     ])
     destination = run_dir / "report.md"

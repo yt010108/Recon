@@ -10,7 +10,7 @@ from recon_harness.competition_tools import CompetitionToolRunner
 from recon_harness.docker_backend import CommandResult
 from recon_harness.models import stage_for_tool, tools_for_stage
 from recon_harness.policy import PolicyError, ScopePolicy
-from recon_harness.reporting import build_report
+from recon_harness.reporting import SINK_HINTS, _matches, build_report
 from recon_harness.storage import RunStore
 
 
@@ -74,6 +74,13 @@ class CompetitionScopeTests(unittest.TestCase):
         self.assertEqual(stage_for_tool("httpx", "competition"), "probe")
         with self.assertRaises(ValueError):
             stage_for_tool("waybackurls", "competition")
+
+    def test_sink_matching_uses_tokens_instead_of_substrings(self) -> None:
+        self.assertNotIn("조회·식별자 입력", _matches("http://10.20.30.5/valid", SINK_HINTS))
+        self.assertIn(
+            "조회·식별자 입력",
+            _matches("http://10.20.30.5/users", SINK_HINTS, ["profileId"]),
+        )
 
 
 class CompetitionAdapterTests(unittest.TestCase):
@@ -193,6 +200,24 @@ class CompetitionAdapterTests(unittest.TestCase):
         self.assertIn("10\\.20\\.30\\.5:8080", scope_value)
         self.assertNotIn("10.20.30.0/24", scope_value)
 
+    def test_parameth_targets_discovered_endpoints_and_normalizes_parameters(self) -> None:
+        run_dir = self.store.run_dir(self.state["run_id"])
+        endpoint = "http://10.20.30.5:8080/api/users"
+        (run_dir / "parsed" / "source-endpoints.json").write_text(
+            json.dumps([{"endpoint": endpoint}]),
+            encoding="utf-8",
+        )
+        backend = FakeBackend(CommandResult(0, "[+] userId\nParameter found: role\n", ""))
+        outcome = CompetitionToolRunner(backend, self.store).run_parameth(
+            self.policy, self.state
+        )
+        self.assertEqual(backend.commands[0][backend.commands[0].index("-u") + 1], endpoint)
+        parsed = json.loads(
+            (run_dir / "parsed" / "parameth.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(parsed[0]["parameters"], ["userId", "role"])
+        self.assertEqual(outcome.item_count, 2)
+
     def test_report_and_attack_surface_show_sink_provenance(self) -> None:
         run_dir = self.store.run_dir(self.state["run_id"])
         endpoint = "http://10.20.30.5:8080/api/users?id=1"
@@ -207,6 +232,11 @@ class CompetitionAdapterTests(unittest.TestCase):
                     "endpoint": endpoint,
                     "kind": "request-static",
                     "value": "/api/users?id=1",
+                    "method": "POST",
+                    "content_type": "application/json",
+                    "query_parameters": ["id"],
+                    "body_parameters": ["profileId"],
+                    "form_fields": [],
                     "line": 42,
                     "context": "fetch('/api/users?id=1')",
                 }
@@ -223,8 +253,24 @@ class CompetitionAdapterTests(unittest.TestCase):
         )
         item = next(value for value in surface["endpoints"] if value["url"] == endpoint)
         self.assertIn("조회·식별자 입력", item["sink_hints"])
-        self.assertEqual(item["parameters"], ["id"])
+        self.assertEqual(item["methods"], ["POST"])
+        self.assertEqual(item["query_parameters"], ["id"])
+        self.assertEqual(item["body_parameters"], ["profileId"])
+        self.assertEqual(item["parameters"], ["id", "profileId"])
+        self.assertGreaterEqual(item["confidence"], 0.8)
+        self.assertTrue(item["finding_id"].startswith("candidate-"))
         self.assertEqual(item["evidence"][0]["line"], 42)
+
+        findings_path = run_dir / "parsed" / "findings.json"
+        findings = json.loads(findings_path.read_text(encoding="utf-8"))
+        self.assertEqual(findings[0]["status"], "unverified")
+        findings[0]["status"] = "confirmed"
+        findings[0]["notes"] = "manual reproduction"
+        findings_path.write_text(json.dumps(findings), encoding="utf-8")
+        build_report(self.store, self.state)
+        preserved = json.loads(findings_path.read_text(encoding="utf-8"))[0]
+        self.assertEqual(preserved["status"], "confirmed")
+        self.assertEqual(preserved["notes"], "manual reproduction")
 
 
 if __name__ == "__main__":

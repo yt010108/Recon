@@ -53,6 +53,21 @@ import(chunk);
         self.assertIn(("request-static", "/api/v1/users"), calls)
         self.assertIn(("dynamic-import", "/_next/static/chunks/v1.js"), calls)
 
+    def test_static_fetch_and_axios_calls_keep_method_and_inputs(self) -> None:
+        source = """
+const endpoint = "/api/users?id=7";
+fetch(endpoint, {method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify({displayName: "A", enabled: true})});
+axios.post("/api/upload", {filename: "a.txt", path: "/tmp"});
+"""
+        calls = _extract_static_calls(source)
+        fetch = next(item for item in calls if item["value"].startswith("/api/users"))
+        self.assertEqual(fetch["method"], "PUT")
+        self.assertEqual(fetch["query_parameters"], ["id"])
+        self.assertEqual(fetch["body_parameters"], ["displayName", "enabled"])
+        upload = next(item for item in calls if item["value"] == "/api/upload")
+        self.assertEqual(upload["method"], "POST")
+        self.assertEqual(upload["body_parameters"], ["filename", "path"])
+
     def test_next_data_script_chunks_and_manifests_are_discovered(self) -> None:
         source = """
 <script id="__NEXT_DATA__" type="application/json">{"buildId":"build123","page":"/home"}</script>

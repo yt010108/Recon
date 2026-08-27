@@ -16,6 +16,11 @@ from .tools import ToolOutcome, _unique_lines
 
 
 COMPETITION_KATANA_DEPTH = 3
+MAX_PARAMETH_TARGETS = 60
+_STATIC_SUFFIXES = {
+    ".css", ".gif", ".ico", ".jpeg", ".jpg", ".js", ".map", ".mjs",
+    ".pdf", ".png", ".svg", ".webp", ".woff", ".woff2",
+}
 
 
 def _origin(value: str) -> str:
@@ -53,6 +58,33 @@ def _web_server(record: dict[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def _parameth_parameter_names(lines: list[str]) -> list[str]:
+    """Parameth 버전별 출력 차이를 허용하며 명시적으로 표시된 파라미터만 정규화한다."""
+    names: list[str] = []
+    patterns = (
+        re.compile(r"parameters?\s+(?:found\s*)?[:=]\s*([A-Za-z0-9_.-]+)", re.IGNORECASE),
+        re.compile(r"\[\+\]\s*([A-Za-z_$][A-Za-z0-9_$.-]*)\s*(?:=>|$)"),
+    )
+    for line in lines:
+        for pattern in patterns:
+            match = pattern.search(line)
+            if match and match.group(1) not in names:
+                names.append(match.group(1))
+                break
+    return names
+
+
+def _parameth_candidate(value: str, policy: ScopePolicy) -> str | None:
+    try:
+        policy.validate_url(value)
+    except PolicyError:
+        return None
+    parsed = urlsplit(value)
+    if Path(parsed.path).suffix.lower() in _STATIC_SUFFIXES:
+        return None
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", "", ""))
 
 
 def _merge_web_fingerprints(
@@ -453,8 +485,34 @@ class CompetitionToolRunner(DeepDiscoveryToolRunner):
         )
 
     def run_parameth(self, policy: ScopePolicy, state: dict[str, Any]) -> ToolOutcome:
-        origins = sorted({_origin(value) for value in self._live_urls(policy, state)})
-        if not origins:
+        run_dir = self.store.run_dir(state["run_id"])
+        candidates: list[str] = []
+
+        def add(value: str) -> None:
+            candidate = _parameth_candidate(value, policy)
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+
+        # 소스에서 직접 확인한 요청을 우선하고, 크롤 URL과 origin을 뒤에 붙인다.
+        try:
+            source_endpoints = json.loads(
+                (run_dir / "parsed" / "source-endpoints.json").read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError):
+            source_endpoints = []
+        for item in source_endpoints if isinstance(source_endpoints, list) else []:
+            if isinstance(item, dict) and item.get("endpoint"):
+                add(str(item["endpoint"]))
+
+        katana_path = run_dir / "parsed" / "katana-urls.txt"
+        if katana_path.exists():
+            for value in _unique_lines(katana_path.read_text(encoding="utf-8")):
+                add(value)
+        for value in self._live_urls(policy, state):
+            add(_origin(value))
+
+        targets = candidates[:MAX_PARAMETH_TARGETS]
+        if not targets:
             return ToolOutcome(0, "Parameth skipped because no live scoped URL exists", skipped=True)
 
         wordlist = "/opt/recon-wordlists/params-small.txt"
@@ -462,25 +520,27 @@ class CompetitionToolRunner(DeepDiscoveryToolRunner):
         errors: list[str] = []
         failed = False
         total = 0
-        for index, origin in enumerate(origins, start=1):
-            policy.validate_url(origin)
+        for index, target in enumerate(targets, start=1):
+            policy.validate_url(target)
             result = self.backend.run(
-                ["parameth", "-u", origin, "-p", wordlist],
+                ["parameth", "-u", target, "-p", wordlist],
                 process_timeout=900,
             )
             self._write_indexed_result(state, "parameth", index, result)
             failed = failed or result.exit_code != 0
             if result.stderr.strip():
-                errors.append(f"{origin}: {result.stderr.strip()}")
+                errors.append(f"{target}: {result.stderr.strip()}")
             interesting = [
                 line.strip()
                 for line in result.stdout.splitlines()
                 if line.strip().startswith("[") or "parameter" in line.lower()
             ]
-            total += len(interesting)
+            parameters = _parameth_parameter_names(interesting)
+            total += len(parameters)
             results.append(
                 {
-                    "target": origin,
+                    "target": target,
+                    "parameters": parameters,
                     "interesting_lines": interesting,
                     "evidence": f"raw/parameth-{index:03d}.log",
                 }
@@ -491,7 +551,7 @@ class CompetitionToolRunner(DeepDiscoveryToolRunner):
         self.store.add_artifact(state, parsed, "parsed", "parameth")
         return ToolOutcome(
             1 if failed else 0,
-            f"Recorded {total} parameter result lines across {len(origins)} web services",
+            f"Recorded {total} parameter candidates across {len(targets)} scoped endpoints",
             total,
             error="\n".join(errors),
         )

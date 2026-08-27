@@ -55,11 +55,11 @@ def _valid_hostname(value: str) -> bool:
 @dataclass(slots=True)
 class ScopePolicy:
     path: Path
-    mode: str
     domain: str | None
     base_url: str
     docker_network: str | None = None
     worker_image: str = DEFAULT_IMAGE
+    mode: str = "internet"
     targets: list[str] = field(default_factory=list)
     allowed_ports: list[int] = field(default_factory=list)
     domains: list[str] = field(init=False)

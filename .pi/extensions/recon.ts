@@ -61,16 +61,37 @@ function toolResult(result: CliResult) {
   };
 }
 
+function competitionArgs(command: "competition-create" | "competition-start", params: { targets: string[]; ports?: number[] }) {
+  const args = [command, ...params.targets];
+  if (params.ports && params.ports.length > 0) {
+    args.push("--ports", params.ports.join(","));
+  }
+  return args;
+}
+
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "recon_create",
     label: "Recon: Run 생성",
-    description: "Create a scoped run without sending network requests.",
+    description: "Create a scoped internet run without sending network requests.",
     parameters: Type.Object({
       domain: Type.String(),
     }),
     async execute(_toolCallId, params, signal) {
       return toolResult(await runCli(["create", params.domain], signal));
+    },
+  });
+
+  pi.registerTool({
+    name: "recon_competition_create",
+    label: "Recon: 대회 Run 생성",
+    description: "Create an IPv4/CIDR-scoped internal competition run without network requests.",
+    parameters: Type.Object({
+      targets: Type.Array(Type.String(), { minItems: 1 }),
+      ports: Type.Optional(Type.Array(Type.Integer({ minimum: 1, maximum: 65535 }))),
+    }),
+    async execute(_toolCallId, params, signal) {
+      return toolResult(await runCli(competitionArgs("competition-create", params), signal));
     },
   });
 
@@ -83,7 +104,7 @@ export default function (pi: ExtensionAPI) {
       target: Type.Union([
         Type.Literal("collect"), Type.Literal("probe"), Type.Literal("crawl"), Type.Literal("discovery"),
         Type.Literal("dorkgen"), Type.Literal("subfinder"), Type.Literal("assetfinder"), Type.Literal("amass_enum"), Type.Literal("waybackurls"),
-        Type.Literal("httpx"), Type.Literal("robots_txt"), Type.Literal("katana"), Type.Literal("source_comments"),
+        Type.Literal("network_discovery"), Type.Literal("httpx"), Type.Literal("robots_txt"), Type.Literal("katana"), Type.Literal("source_comments"),
         Type.Literal("nuclei"), Type.Literal("gobuster_dir"), Type.Literal("parameth"),
       ]),
     }),
@@ -97,7 +118,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "recon_report",
     label: "Recon: 보고서 갱신",
-    description: "Rebuild report.md from stored artifacts without network requests.",
+    description: "Rebuild report.md and attack-surface.json from stored artifacts without network requests.",
     parameters: Type.Object({ run_id: Type.String() }),
     async execute(_toolCallId, params, signal) {
       return toolResult(await runCli(["report", "--run", params.run_id], signal));
@@ -107,12 +128,25 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "recon_start",
     label: "Recon: 시작",
-    description: "Run complete recon for one allowed domain. Nuclei is available separately through recon_run.",
+    description: "Run complete internet recon for one allowed domain. Nuclei is available separately through recon_run.",
     parameters: Type.Object({
       domain: Type.String({ description: "The single allowed domain" }),
     }),
     async execute(_toolCallId, params, signal) {
       return toolResult(await runCli(["start", params.domain], signal));
+    },
+  });
+
+  pi.registerTool({
+    name: "recon_competition_start",
+    label: "Recon: 대회 시작",
+    description: "Run scoped internal competition recon for explicit IPv4 addresses or CIDRs. Nuclei remains opt-in.",
+    parameters: Type.Object({
+      targets: Type.Array(Type.String(), { minItems: 1 }),
+      ports: Type.Optional(Type.Array(Type.Integer({ minimum: 1, maximum: 65535 }))),
+    }),
+    async execute(_toolCallId, params, signal) {
+      return toolResult(await runCli(competitionArgs("competition-start", params), signal));
     },
   });
 

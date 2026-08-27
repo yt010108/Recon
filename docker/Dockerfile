@@ -43,11 +43,11 @@ FROM kalilinux/kali-rolling:latest
 ARG DEBIAN_FRONTEND=noninteractive
 
 LABEL org.opencontainers.image.title="Hermes web reconnaissance worker" \
-      org.opencontainers.image.description="Bug-bounty web recon worker without Nuclei, Nmap, Metasploit, or full SecLists"
+      org.opencontainers.image.description="Scoped internet and internal competition web reconnaissance worker"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates chromium gobuster httpx-toolkit python2 subfinder amass tini \
+        ca-certificates chromium gobuster httpx-toolkit nmap python2 subfinder amass tini \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* \
     && mkdir -p /work /output /opt/recon-wordlists
 

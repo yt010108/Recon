@@ -13,6 +13,7 @@ from recon_harness.tools import (
     _candidate_source_urls,
     _extract_c_style_comments,
     _extract_html_comments,
+    _extract_hidden_content,
     _extract_source_endpoints,
     _response_body,
 )
@@ -106,6 +107,28 @@ axios.post("https://example.com/graphql")"""
             [],
         )
 
+    def test_html_and_embedded_js_hidden_content_is_extracted(self) -> None:
+        source = """<input type="hidden" name="csrf" value="abc">
+<section hidden id="admin"></section>
+<div style="display: none" data-path="/internal"></div>
+<script>panel.hidden = true; node.style.visibility = 'hidden';</script>"""
+        findings = _extract_hidden_content(source, "html")
+        self.assertEqual(len(findings), 5)
+        self.assertEqual(findings[0]["name"], "csrf")
+        self.assertEqual(findings[0]["value"], "abc")
+        self.assertEqual(findings[1]["id"], "admin")
+        self.assertIn("js-hidden-property", {item["kind"] for item in findings})
+        self.assertIn("js-visibility-hidden", {item["kind"] for item in findings})
+
+    def test_javascript_hidden_content_is_extracted(self) -> None:
+        findings = _extract_hidden_content(
+            "el.setAttribute('hidden', ''); const config = {type: 'hidden'};", "javascript"
+        )
+        self.assertEqual(
+            {item["kind"] for item in findings},
+            {"js-set-hidden", "js-hidden-input"},
+        )
+
     def test_source_candidates_stay_in_scope_and_skip_binary(self) -> None:
         policy = ScopePolicy.load(EXAMPLE_SCOPE)
         values = [
@@ -173,7 +196,7 @@ class AdapterTests(unittest.TestCase):
         (run_dir / "parsed" / "katana-urls.txt").write_text(
             "http://recon-juice-shop:3000/app.js\n", encoding="utf-8"
         )
-        source = "fetch('/api/orders?id=1');\nconst action_id = 'abc123';\n/* secret=VISIBLE\nsecond line */"
+        source = "fetch('/api/orders?id=1');\nconst action_id = 'abc123';\npanel.hidden = true;\n/* secret=VISIBLE\nsecond line */"
         record = {
             "url": "http://recon-juice-shop:3000/app.js",
             "status_code": 200,
@@ -193,6 +216,11 @@ class AdapterTests(unittest.TestCase):
         )
         self.assertTrue(any(item.get("endpoint", "").endswith("/api/orders?id=1") for item in endpoints))
         self.assertTrue(any(item["kind"] == "action-id" and item["value"] == "abc123" for item in endpoints))
+        hidden = json.loads(
+            (run_dir / "parsed" / "source-hidden.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(hidden[0]["kind"], "js-hidden-property")
+        self.assertEqual(hidden[0]["source"], "http://recon-juice-shop:3000/app.js")
         self.assertNotIn(
             "VISIBLE",
             (run_dir / "raw" / "source_comments.jsonl").read_text(encoding="utf-8"),

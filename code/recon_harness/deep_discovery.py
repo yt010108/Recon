@@ -17,6 +17,7 @@ from .tools import (
     _candidate_source_urls,
     _extract_c_style_comments,
     _extract_html_comments,
+    _extract_hidden_content,
     _extract_source_endpoints,
     _katana_scope_regexes,
     _response_body,
@@ -539,9 +540,11 @@ class DeepDiscoveryToolRunner(ToolRunner):
         comments: list[dict[str, Any]] = []
         endpoints: list[dict[str, Any]] = []
         assets: list[dict[str, Any]] = []
+        hidden: list[dict[str, Any]] = []
         seen_comments: set[tuple[str, int, str, str]] = set()
         seen_endpoints: set[tuple[str, str, str, str]] = set()
         seen_assets: set[tuple[str, str, str]] = set()
+        seen_hidden: set[tuple[str, int, str, str]] = set()
         reviewed_urls: set[str] = set()
         discovered_urls: list[str] = []
 
@@ -592,6 +595,18 @@ class DeepDiscoveryToolRunner(ToolRunner):
             if kind is None or not body:
                 return
             reviewed_urls.add(source_url)
+
+            for candidate in _extract_hidden_content(body, kind):
+                key = (
+                    source_url,
+                    int(candidate["line"]),
+                    str(candidate["kind"]),
+                    str(candidate.get("context", "")),
+                )
+                if key in seen_hidden:
+                    continue
+                seen_hidden.add(key)
+                hidden.append({"source": source_url, "content_type": record.get("content_type"), **candidate})
 
             if kind == "html":
                 extracted_comments = _extract_html_comments(body)
@@ -668,6 +683,8 @@ class DeepDiscoveryToolRunner(ToolRunner):
         self.store.add_artifact(state, run_dir / "parsed" / "source-endpoints.json", "parsed", "source_comments")
         atomic_write_json(run_dir / "parsed" / "source-assets.json", assets)
         self.store.add_artifact(state, run_dir / "parsed" / "source-assets.json", "parsed", "source_comments")
+        atomic_write_json(run_dir / "parsed" / "source-hidden.json", hidden)
+        self.store.add_artifact(state, run_dir / "parsed" / "source-hidden.json", "parsed", "source_comments")
 
         exit_code = initial_result.exit_code
         errors = [initial_result.stderr.strip()] if initial_result.stderr.strip() else []
@@ -679,8 +696,9 @@ class DeepDiscoveryToolRunner(ToolRunner):
             exit_code,
             (
                 f"Reviewed {len(reviewed_urls)} source responses; recorded {len(comments)} comments, "
-                f"{len(endpoints)} endpoint/action candidates and {len(assets)} JS/manifest/sourcemap assets"
+                f"{len(hidden)} hidden candidates, {len(endpoints)} endpoint/action candidates and "
+                f"{len(assets)} JS/manifest/sourcemap assets"
             ),
-            len(comments) + len(endpoints) + len(assets),
+            len(comments) + len(hidden) + len(endpoints) + len(assets),
             error="\n".join(errors),
         )

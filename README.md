@@ -17,6 +17,113 @@ pi
 
 Pi에서 `/recon`은 기존 인터넷 도메인 모드를, `/recon-competition`은 내부망 대회 모드를 사용한다.
 
+## Playwright
+
+Node.js용 Playwright와 Chromium이 로컬에 설치되어 있다. JS 렌더링, SPA 라우팅, 폼 입력 등 브라우저 상호작용이 필요한 확인에 사용할 수 있다.
+
+```bash
+npm install
+npx playwright install chromium
+npx playwright --version
+```
+
+Node.js 스크립트에서는 다음처럼 사용한다.
+
+```js
+const { chromium } = require("playwright");
+
+(async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  await page.goto("http://ALLOWED-TARGET/", { waitUntil: "networkidle" });
+  console.log(await page.title());
+  await browser.close();
+})();
+```
+
+대회 모드에서는 대회에서 명시적으로 허용된 IP/CIDR와 포트 범위 안에서만 사용한다.
+
+### Competition 별도 실행
+
+`competition-start`의 네 단계에는 Playwright가 자동 포함되지 않는다. 대회에서 브라우저 자동화와 AI 사용이 허용된 경우에도 Playwright는 별도 실행하며, 명시된 IPv4와 포트만 `TARGET_URL`로 지정한다. 발견된 링크나 리다이렉트로 범위를 확대하지 않는다.
+
+다음 예시는 대상 origin을 브라우저로 열고, 같은 IP/포트의 요청·응답만 기록하며, 외부 origin 요청은 차단한다. 비밀번호 변경, 계정 생성, 구매 등 상태 변경 동작은 포함하지 않는다.
+
+```bash
+RUN_DIR="runs/<RUN_ID>" \
+TARGET_URL="http://<ALLOWED_IPV4>:<ALLOWED_PORT>" \
+node - <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const net = require("node:net");
+const { chromium } = require("playwright");
+
+const target = new URL(process.env.TARGET_URL);
+if (!["http:", "https:"].includes(target.protocol) || !net.isIPv4(target.hostname)) {
+  throw new Error("TARGET_URL must use an allowed IPv4 address");
+}
+if (!target.port) throw new Error("TARGET_URL must include an explicit port");
+const targetPort = Number(target.port);
+const inScope = (value) => {
+  const url = new URL(value);
+  const port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
+  return url.hostname === target.hostname && port === targetPort;
+};
+
+(async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const requests = [];
+  const responses = [];
+
+  await page.route("**/*", async (route) => {
+    try {
+      if (!inScope(route.request().url())) return route.abort();
+      await route.continue();
+    } catch {
+      await route.abort();
+    }
+  });
+  page.on("request", (request) => {
+    if (inScope(request.url())) requests.push({ method: request.method(), url: request.url() });
+  });
+  page.on("response", (response) => {
+    if (inScope(response.url())) responses.push({ status: response.status(), url: response.url() });
+  });
+
+  const navigation = await page.goto(target.href, {
+    waitUntil: "domcontentloaded",
+    timeout: 30000,
+  });
+  const result = {
+    target: target.href,
+    status: navigation?.status() ?? null,
+    final_url: page.url(),
+    title: await page.title(),
+    request_count: requests.length,
+    response_count: responses.length,
+    requests,
+    responses,
+  };
+
+  const runDir = path.resolve(process.env.RUN_DIR || ".");
+  fs.mkdirSync(path.join(runDir, "parsed"), { recursive: true });
+  fs.mkdirSync(path.join(runDir, "screenshots"), { recursive: true });
+  fs.writeFileSync(
+    path.join(runDir, "parsed", "playwright-manual.json"),
+    JSON.stringify(result, null, 2) + "\n",
+  );
+  await page.screenshot({ path: path.join(runDir, "screenshots", "playwright-root.png"), fullPage: true });
+  console.log(JSON.stringify({ target: result.target, status: result.status, title: result.title }));
+  await context.close();
+  await browser.close();
+})().catch((error) => { console.error(error); process.exit(1); });
+NODE
+```
+
+`RUN_DIR`에는 기존 run 디렉터리를 넣고, 대상이 호스트에서 도달되지 않는 내부망이면 Playwright 실행 환경을 해당 Docker 네트워크에 연결해야 한다. 생성 결과는 `parsed/playwright-manual.json`과 `screenshots/playwright-root.png`에 저장된다. 이 단계는 수동 검증용이며 자동 결과만으로 취약점을 확정하지 않는다.
+
 ## Internet 모드
 
 전체 실행에는 다음 네 단계가 들어간다.
@@ -111,6 +218,7 @@ parsed/httpx.json
 parsed/web-fingerprints.json
 parsed/katana-urls.txt
 parsed/source-endpoints.json
+parsed/source-hidden.json
 parsed/gobuster-dir.json
 parsed/parameth.json
 parsed/attack-surface.json

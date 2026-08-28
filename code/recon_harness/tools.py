@@ -170,6 +170,92 @@ def _extract_html_comments(source: str) -> list[dict[str, Any]]:
     return comments
 
 
+class _HiddenHTMLParser(HTMLParser):
+    """HTML에서 브라우저 UI에 숨겨지는 요소와 hidden 입력값을 수집한다."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.findings: list[dict[str, Any]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = {name.lower(): value or "" for name, value in attrs}
+        lowered = tag.lower()
+        style = values.get("style", "").lower()
+        reasons: list[str] = []
+        if lowered == "input" and values.get("type", "").lower() == "hidden":
+            reasons.append("input-type-hidden")
+        if "hidden" in values:
+            reasons.append("hidden-attribute")
+        if values.get("aria-hidden", "").lower() == "true":
+            reasons.append("aria-hidden")
+        if re.search(r"(?:^|;)\s*display\s*:\s*none\b", style):
+            reasons.append("display-none")
+        if re.search(r"(?:^|;)\s*visibility\s*:\s*hidden\b", style):
+            reasons.append("visibility-hidden")
+        if not reasons:
+            return
+        self.findings.append(
+            {
+                "kind": "html-hidden",
+                "line": self.getpos()[0],
+                "tag": lowered,
+                "reasons": reasons,
+                "name": values.get("name", ""),
+                "value": values.get("value", ""),
+                "id": values.get("id", ""),
+                "context": self.get_starttag_text() or f"<{lowered}>",
+            }
+        )
+
+
+_JS_HIDDEN_PATTERNS = (
+    ("js-hidden-property", re.compile(r"\bhidden\s*[:=]\s*true\b", re.IGNORECASE)),
+    ("js-hidden-input", re.compile(r'''\btype\s*[:=]\s*["']hidden["']''', re.IGNORECASE)),
+    ("js-display-none", re.compile(r'''(?:\.style)?\.display\s*=\s*["']none["']''', re.IGNORECASE)),
+    ("js-visibility-hidden", re.compile(r'''(?:\.style)?\.visibility\s*=\s*["']hidden["']''', re.IGNORECASE)),
+    ("js-set-hidden", re.compile(r'''\.setAttribute\s*\(\s*["']hidden["']''', re.IGNORECASE)),
+)
+
+
+def _extract_hidden_content(source: str, language: str) -> list[dict[str, Any]]:
+    """이미 수집한 HTML/JS에서 숨김 UI와 hidden 입력 후보를 오프라인 추출한다."""
+    findings: list[dict[str, Any]] = []
+    if language == "html":
+        parser = _HiddenHTMLParser()
+        try:
+            parser.feed(source)
+        except Exception:
+            pass
+        findings.extend(parser.findings)
+
+    if language not in {"html", "javascript"}:
+        return findings
+    regions: list[tuple[str, int]] = [(source, 0)]
+    if language == "html":
+        regions = [
+            (match.group(1), match.start(1))
+            for match in re.finditer(
+                r"<script\b[^>]*>(.*?)</script\s*>",
+                source,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+        ]
+    for region, region_offset in regions:
+        for kind, pattern in _JS_HIDDEN_PATTERNS:
+            for match in pattern.finditer(region):
+                offset = region_offset + match.start()
+                line_start = source.rfind("\n", 0, offset) + 1
+                line_end = source.find("\n", offset)
+                findings.append(
+                    {
+                        "kind": kind,
+                        "line": source.count("\n", 0, offset) + 1,
+                        "context": source[line_start : len(source) if line_end < 0 else line_end].strip(),
+                    }
+                )
+    return findings
+
+
 # 이미 받은 소스만 검사한다. 이 패턴들은 새 URL에 요청을 보내지 않는다.
 _ENDPOINT_PATTERNS = (
     ("api-path", re.compile(r'''["'`]((?:/(?:api|rest|graphql|v\d+))(?:[/?][^"'`\s<>\\]*)?)["'`]''', re.IGNORECASE)),
@@ -824,8 +910,10 @@ class ToolRunner:
         records = self._write_sanitized_httpx_result(state, "source_comments", result)
         findings: list[dict[str, Any]] = []
         endpoints: list[dict[str, Any]] = []
+        hidden: list[dict[str, Any]] = []
         seen: set[tuple[str, int, str, str]] = set()
         seen_endpoints: set[tuple[str, str, str]] = set()
+        seen_hidden: set[tuple[str, int, str, str]] = set()
         reviewed = 0
         for record in records:
             url = str(record.get("url") or record.get("input") or "")
@@ -842,6 +930,12 @@ class ToolRunner:
                 comments = _extract_html_comments(body)
             else:
                 comments = _extract_c_style_comments(body, kind)
+            for candidate in _extract_hidden_content(body, kind):
+                key = (url, int(candidate["line"]), str(candidate["kind"]), str(candidate.get("context", "")))
+                if key in seen_hidden:
+                    continue
+                seen_hidden.add(key)
+                hidden.append({"source": url, "content_type": record.get("content_type"), **candidate})
             for candidate in _extract_source_endpoints(body):
                 endpoint = None
                 if candidate["kind"] != "action-id":
@@ -878,10 +972,13 @@ class ToolRunner:
         endpoint_path = run_dir / "parsed" / "source-endpoints.json"
         atomic_write_json(endpoint_path, endpoints)
         self.store.add_artifact(state, endpoint_path, "parsed", "source_comments")
+        hidden_path = run_dir / "parsed" / "source-hidden.json"
+        atomic_write_json(hidden_path, hidden)
+        self.store.add_artifact(state, hidden_path, "parsed", "source_comments")
         return ToolOutcome(
             result.exit_code,
-            f"Reviewed {reviewed} source responses; recorded {len(findings)} comments and {len(endpoints)} endpoint/action candidates",
-            len(findings) + len(endpoints),
+            f"Reviewed {reviewed} source responses; recorded {len(findings)} comments, {len(hidden)} hidden candidates and {len(endpoints)} endpoint/action candidates",
+            len(findings) + len(hidden) + len(endpoints),
             error=result.stderr.strip(),
         )
 

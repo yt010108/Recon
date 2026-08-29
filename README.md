@@ -41,6 +41,30 @@ const { chromium } = require("playwright");
 })();
 ```
 
+### Python Playwright
+
+Python 3.11이 설치되어 있으며, 프로젝트 전용 `.venv`에 Python Playwright와 Chromium을 설치한다.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\python.exe -m playwright install chromium
+.\.venv\Scripts\python.exe -c "from playwright.sync_api import sync_playwright; print('Python Playwright OK')"
+```
+
+Python 스크립트 예시:
+
+```python
+from playwright.sync_api import sync_playwright
+
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True)
+    page = browser.new_page()
+    page.goto("http://ALLOWED-TARGET/", wait_until="networkidle")
+    print(page.title())
+    browser.close()
+```
+
 대회 모드에서는 대회에서 명시적으로 허용된 IP/CIDR와 포트 범위 안에서만 사용한다.
 
 ### Competition 별도 실행

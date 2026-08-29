@@ -13,7 +13,14 @@ runs/
 # Local Pi/runtime state
 .runtime/
 
-# Python build/test caches
+# Local browser automation data (may contain cookies and login tokens)
+/.browser-profile/
+
+# Accidental Windows null-device output
+/nul
+
+# Python virtual environment and build/test caches
+.venv/
 __pycache__/
 *.pyc
 .pytest_cache/

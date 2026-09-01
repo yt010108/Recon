@@ -14,7 +14,11 @@ runs/
 .runtime/
 
 # Python build/test caches
+.venv/
 __pycache__/
 *.pyc
 .pytest_cache/
 *.egg-info/
+
+# Local JavaScript dependencies
+node_modules/

@@ -1,107 +1,33 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
 
+from recon_harness.cli import render_scope_toml
 from recon_harness.policy import ScopePolicy
-from recon_harness.reporting import build_report
 from recon_harness.storage import RunStore
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
-
 class RunStoreTests(unittest.TestCase):
-    def test_create_freezes_scope_and_persists_progress(self) -> None:
-        policy = ScopePolicy.load(PROJECT_ROOT / "tests" / "lab" / "scope.toml")
+    def test_state_json_is_canonical_and_progress_is_derived(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            store = RunStore(temporary)
-            state = store.create(policy.path, policy.snapshot())
+            root = Path(temporary)
+            scope_path = root / "scope.toml"
+            scope_path.write_text(render_scope_toml(["10.20.30.5"], [443]), encoding="utf-8")
+            policy = ScopePolicy.load(scope_path)
+            store = RunStore(root / "runs")
+            state = store.create(scope_path, policy.snapshot())
             run_dir = store.run_dir(state["run_id"])
-            self.assertTrue((run_dir / "scope.toml").is_file())
-            self.assertFalse((run_dir / "state.json").exists())
-            self.assertFalse((run_dir / "events.jsonl").exists())
-            self.assertTrue((run_dir / "screenshots").is_dir())
-            self.assertTrue((run_dir / "progress.md").is_file())
-            loaded = store.load(state["run_id"])
-            self.assertEqual(loaded["scope"]["name"], "recon-juice-shop")
-
-    def test_report_is_created_and_registered(self) -> None:
-        policy = ScopePolicy.load(PROJECT_ROOT / "tests" / "lab" / "scope.toml")
-        with tempfile.TemporaryDirectory() as temporary:
-            store = RunStore(temporary)
-            state = store.create(policy.path, policy.snapshot())
-            run_dir = store.run_dir(state["run_id"])
-            (run_dir / "parsed" / "source-comments.json").write_text(
-                json.dumps(
-                    [
-                        {
-                            "url": "http://recon-juice-shop:3000/app.js",
-                            "kind": "javascript",
-                            "line": 4,
-                            "text": "token=SAMPLE-ORIGINAL-VALUE\n``` still verbatim",
-                        }
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            (run_dir / "parsed" / "hosts.txt").write_text(
-                "recon-juice-shop\n", encoding="utf-8"
-            )
-            (run_dir / "parsed" / "katana-urls.txt").write_text(
-                "http://recon-juice-shop:3000/api/orders?id=1\n",
-                encoding="utf-8",
-            )
-            (run_dir / "parsed" / "url-queue.jsonl").write_text(
-                json.dumps(
-                    {
-                        "url": "http://recon-juice-shop:3000/admin?debug=1",
-                        "sources": ["robots"],
-                        "status": "queued",
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            (run_dir / "parsed" / "google-dorks.txt").write_text(
-                "site:recon-juice-shop\n", encoding="utf-8"
-            )
-            (run_dir / "parsed" / "nuclei-findings.json").write_text(
-                json.dumps(
-                    [
-                        {
-                            "template_id": "test-header",
-                            "name": "Test Header",
-                            "severity": "low",
-                            "matched_at": "http://recon-juice-shop:3000/",
-                            "status_code": 200,
-                            "evidence": "raw/nuclei.jsonl:1",
-                        }
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            report = build_report(store, state)
-            self.assertTrue(report.is_file())
-            loaded = store.load(state["run_id"])
-            self.assertTrue(any(item["path"] == "report.md" for item in loaded["artifacts"]))
-            text = report.read_text(encoding="utf-8")
-            self.assertIn("http://recon-juice-shop:3000", text)
-            self.assertIn("http://recon-juice-shop:3000/admin?debug=1", text)
-            self.assertIn("## 주요 엔드포인트", text)
-            self.assertIn("## 우선 검토할 입력 지점", text)
-            self.assertIn("조회·식별자 입력", text)
-            self.assertIn("## Google Dorks", text)
-            self.assertIn("## Nuclei 발견 후보", text)
-            self.assertIn("test-header", text)
-            self.assertIn("raw/nuclei.jsonl:1", text)
-            self.assertNotIn("SAMPLE-ORIGINAL-VALUE", text)
+            self.assertTrue((run_dir / "state.json").is_file())
+            self.assertTrue((run_dir / "normalized").is_dir())
+            self.assertEqual(store.load(state["run_id"])["schema_version"], 2)
+            progress = (run_dir / "progress.md").read_text(encoding="utf-8")
+            self.assertIn("정식 상태는 `state.json`", progress)
 
     def test_invalid_run_id_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            store = RunStore(temporary)
+            store = RunStore(Path(temporary) / "runs")
             with self.assertRaises(ValueError):
                 store.run_dir("../escape")
 

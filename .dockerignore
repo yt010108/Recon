@@ -1,5 +1,8 @@
 .git
 .runtime
+.venv
+node_modules
+.env
 __pycache__
 *.pyc
 runs

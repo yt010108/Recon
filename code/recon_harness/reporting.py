@@ -1,39 +1,16 @@
-"""수집 결과에서 자산, 엔드포인트 역할, 입력 지점 후보를 요약한다."""
+"""정규화된 웹 표면에서 사람이 바로 읽을 작은 요약을 만든다."""
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urljoin, urlsplit
 
-from .storage import RunStore
-
-
-ROLE_HINTS = {
-    "인증": ("login", "logout", "signin", "signup", "register", "auth", "oauth", "sso", "password"),
-    "관리": ("admin", "manage", "dashboard", "console", "panel"),
-    "API": ("api", "graphql", "swagger", "openapi", "rpc"),
-    "파일 처리": ("upload", "download", "export", "import", "attachment", "file"),
-    "검색": ("search", "query", "find", "filter"),
-    "사용자/객체": ("user", "account", "profile", "order", "invoice", "item", "document"),
-    "개발/운영": ("debug", "dev", "test", "internal", "health", "metrics", "actuator"),
-}
-
-SINK_HINTS = {
-    "파일 입력": ("upload", "import", "file", "attachment", "path", "filename"),
-    "외부 URL/이동": ("url", "uri", "redirect", "return", "next", "callback", "webhook"),
-    "명령·템플릿 입력": ("cmd", "command", "exec", "template", "render"),
-    "조회·식별자 입력": ("id", "user", "account", "order", "document", "item"),
-    "검색·필터 입력": ("search", "query", "q", "filter", "sort"),
-    "인증 입력": ("login", "auth", "token", "password", "reset", "oauth"),
-}
+from .storage import RunStore, atomic_write_text
+from .surface import build_surface
 
 
-def _lines(path) -> list[str]:
-    return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()] if path.exists() else []
-
-
-def _json(path, default: Any) -> Any:
+def _json(path: Path, default: Any) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -41,123 +18,110 @@ def _json(path, default: Any) -> Any:
 
 
 def _cell(value: Any) -> str:
-    return str(value or "-").replace("|", "\\|").replace("\n", " ")
+    rendered = "-" if value is None or value == "" else str(value)
+    return rendered.replace("|", "\\|").replace("\n", " ")
 
 
-def _matches(url: str, hints: dict[str, tuple[str, ...]]) -> list[str]:
-    path = urlsplit(url).path.lower()
-    params = [name.lower() for name, _ in parse_qsl(urlsplit(url).query, keep_blank_values=True)]
-    return [name for name, words in hints.items() if any(word in value for value in [path, *params] for word in words)]
+def _evidence(items: list[dict[str, Any]]) -> str:
+    labels: list[str] = []
+    for item in items:
+        source = item.get("source")
+        label = str(source or item.get("artifact") or item.get("tool") or "unknown")
+        if source and item.get("line"):
+            label += f":{item['line']}"
+        if label not in labels:
+            labels.append(label)
+    return "; ".join(labels[:2]) + (f"; +{len(labels) - 2}" if len(labels) > 2 else "")
 
 
-def _urls(run_dir, base_url: str) -> list[str]:
-    values: set[str] = set()
-    for name in ("wayback-urls.txt", "alive-urls.txt", "katana-urls.txt"):
-        values.update(_lines(run_dir / "parsed" / name))
-    for line in _lines(run_dir / "parsed" / "url-queue.jsonl"):
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(item, dict) and item.get("url"):
-            values.add(str(item["url"]))
-    for item in _json(run_dir / "parsed" / "gobuster-dir.json", []):
-        if item.get("path"):
-            values.add(urljoin(base_url.rstrip("/") + "/", str(item["path"]).lstrip("/")))
-    for item in _json(run_dir / "parsed" / "source-endpoints.json", []):
-        if item.get("endpoint"):
-            values.add(str(item["endpoint"]))
-    return sorted(value for value in values if value.startswith(("http://", "https://")))
-
-
-def build_report(store: RunStore, state: dict[str, Any]):
+def build_report(store: RunStore, state: dict[str, Any]) -> Path:
     run_dir = store.run_dir(state["run_id"])
-    base_url = state["scope"]["base_url"]
-    services = _json(run_dir / "parsed" / "httpx.json", [])
-    source_endpoints = _json(run_dir / "parsed" / "source-endpoints.json", [])
-    dorks = _lines(run_dir / "parsed" / "google-dorks.txt")
-    nuclei_findings = _json(run_dir / "parsed" / "nuclei-findings.json", [])
-    urls = _urls(run_dir, base_url)
-    endpoints = [(url, _matches(url, ROLE_HINTS)) for url in urls]
-    endpoints = [(url, roles or ["일반 웹"]) for url, roles in endpoints if roles or urlsplit(url).query]
-    sinks = [(url, reasons) for url in urls if (reasons := _matches(url, SINK_HINTS))]
+    surface = build_surface(store, state)
+    origins = surface["origins"]
+    routes = surface["routes"]
+    candidates = surface["candidates"]
+    coverage = surface["coverage"]
+    scope = state["scope"]
+    nuclei = _json(run_dir / "parsed" / "nuclei-findings.json", [])
 
     lines = [
-        f"# Recon: {base_url}", "",
-        f"- 상태: `{state['status']}`",
-        f"- 호스트: `{len(_lines(run_dir / 'parsed' / 'hosts.txt'))}`",
-        f"- 활성 서비스: `{len(services)}`",
-        f"- 수집 URL: `{len(urls)}`",
-        f"- Nuclei 발견 후보: `{len(nuclei_findings)}`",
-        f"- 검토할 입력 지점: `{len(sinks)}`", "",
-        "## 자산", "", "| URL | 상태 | 제목 | 기술 |", "|---|---:|---|---|",
+        f"# Competition Web Recon: {scope.get('target_label', '-')}",
+        "",
+        f"- 상태: `{state.get('status', '-')}`",
+        f"- 프로필: `{scope.get('profile', 'fast')}`",
+        f"- 활성 origin: `{len(origins)}`",
+        f"- 기능 단위 route: `{len(routes)}`",
+        f"- 우선 검토 후보: `{len(candidates)}` / 최대 20",
+        f"- 실패 도구: `{len(coverage['failures'])}`",
+        "",
+        "## 활성 웹 서비스",
+        "",
+        "| URL | 상태 | 제목 | 서버 | 기술 |",
+        "|---|---:|---|---|---|",
     ]
-    for item in services:
-        tech = item.get("tech") or item.get("technologies") or []
-        tech = ", ".join(map(str, tech)) if isinstance(tech, list) else tech
-        lines.append(f"| {_cell(item.get('url') or item.get('input'))} | {_cell(item.get('status_code'))} | {_cell(item.get('title'))} | {_cell(tech)} |")
-    if not services:
-        lines.append("| - | - | 활성 서비스 없음 | - |")
-
-    lines.extend(["", "## 주요 엔드포인트", "", "| 역할 | URL |", "|---|---|"])
-    lines.extend(f"| {_cell(', '.join(roles))} | {_cell(url)} |" for url, roles in endpoints)
-    if not endpoints:
-        lines.append("| - | 역할을 추정할 엔드포인트 없음 |")
-
-    lines.extend(["", "## 소스에서 찾은 경로와 액션", "", "| 유형 | 값 | 출처 |", "|---|---|---|"])
-    for item in source_endpoints:
-        lines.append(f"| {_cell(item.get('kind'))} | {_cell(item.get('endpoint') or item.get('value'))} | {_cell(item.get('source'))}:{_cell(item.get('line'))} |")
-    if not source_endpoints:
-        lines.append("| - | 발견된 후보 없음 | - |")
-
-    severity_order = {
-        "critical": 0,
-        "high": 1,
-        "medium": 2,
-        "low": 3,
-        "info": 4,
-        "unknown": 5,
-    }
-    nuclei_findings = sorted(
-        nuclei_findings,
-        key=lambda item: (
-            severity_order.get(str(item.get("severity", "unknown")).lower(), 5),
-            str(item.get("template_id", "")),
-            str(item.get("matched_at", "")),
-        ),
-    )
-    lines.extend([
-        "", "## Nuclei 발견 후보", "",
-        "Nuclei 템플릿의 자동 탐지 결과이며 취약점 확정이 아니다.", "",
-        "| 심각도 | 템플릿 | 매처 | 이름 | 대상 | HTTP | 근거 |",
-        "|---|---|---|---|---|---:|---|",
-    ])
-    for item in nuclei_findings:
+    for item in origins[:30]:
+        technologies = item.get("technologies") or []
+        if isinstance(technologies, list):
+            technologies = ", ".join(map(str, technologies))
         lines.append(
-            f"| {_cell(item.get('severity'))} | {_cell(item.get('template_id'))} | "
-            f"{_cell(item.get('matcher_name'))} | {_cell(item.get('name'))} | "
-            f"{_cell(item.get('matched_at'))} | "
-            f"{_cell(item.get('status_code'))} | `{_cell(item.get('evidence'))}` |"
+            f"| {_cell(item.get('url'))} | {_cell(item.get('status_code'))} | "
+            f"{_cell(item.get('title'))} | {_cell(item.get('web_server'))} | {_cell(technologies)} |"
         )
-    if not nuclei_findings:
-        lines.append("| - | - | - | 근거가 확인된 발견 후보 없음 | - | - | - |")
+    if not origins:
+        lines.append("| - | - | 활성 웹 서비스 없음 | - | - |")
 
-    lines.extend(["", "## 우선 검토할 입력 지점", "", "경로명과 쿼리 파라미터에 따른 후보이며 취약점 판정이 아니다.", "", "| 후보 유형 | URL | 파라미터 |", "|---|---|---|"])
-    for url, reasons in sinks:
-        params = ", ".join(name for name, _ in parse_qsl(urlsplit(url).query, keep_blank_values=True)) or "-"
-        lines.append(f"| {_cell(', '.join(reasons))} | {_cell(url)} | {_cell(params)} |")
-    if not sinks:
-        lines.append("| - | 발견된 후보 없음 | - |")
+    lines.extend(
+        [
+            "",
+            "## 우선 검토 후보",
+            "",
+            "| 우선 | Method | Route | 입력 | 이유 | 근거 |",
+            "|---|---|---|---|---|---|",
+        ]
+    )
+    for item in candidates:
+        inputs = list(dict.fromkeys([*item["query_parameters"], *item["body_parameters"]]))
+        lines.append(
+            f"| {_cell(item['priority'])} | {_cell(item['method'])} | {_cell(item['route'])} | "
+            f"{_cell(', '.join(inputs))} | {_cell('; '.join(item['reasons']))} | "
+            f"{_cell(_evidence(item['evidence']))} |"
+        )
+        lines.append(f"|  |  | 다음 행동 |  | {_cell(item['next_action'])} |  |")
+    if not candidates:
+        lines.append("| - | - | 검토 후보 없음 | - | - | - |")
 
-    lines.extend([
-        "", "## Google Dorks", "",
-        f"Google 요청 없이 검색식 `{len(dorks)}`개를 생성했다: `parsed/google-dorks.txt`"
-        if dorks else "생성된 검색식이 없다.",
-    ])
+    lines.extend(["", "## 실패 및 미확인 영역", ""])
+    if coverage["failures"]:
+        lines.extend(["| 단계 | 도구 | 원인 |", "|---|---|---|"])
+        for item in coverage["failures"]:
+            error = str(item["error"])
+            if len(error) > 180:
+                error = error[:177] + "..."
+            lines.append(f"| {_cell(item['stage'])} | {_cell(item['tool'])} | {_cell(error)} |")
+    else:
+        lines.append("기록된 도구 실패가 없다.")
 
-    lines.extend(["", "## 증거", "", "원문은 `raw/`, 정리된 결과는 `parsed/`에 있다.", ""])
-    destination = run_dir / "report.md"
-    destination.write_text("\n".join(lines), encoding="utf-8", newline="\n")
-    store.add_artifact(state, destination, "report", "harness")
+    lines.extend(["", "## Nuclei", ""])
+    lines.append(
+        f"별도 실행 결과 `{len(nuclei)}`건. 자동 탐지는 취약점 확정이 아니다."
+        if nuclei else "Nuclei는 실행되지 않았거나 발견 결과가 없다."
+    )
+    lines.extend(
+        [
+            "",
+            "## 증거 위치",
+            "",
+            "- 원본 도구 출력: `raw/`",
+            "- 도구별 중간 결과: `parsed/`",
+            "- 활성 origin: `normalized/origins.json`",
+            "- 전체 기능 route: `normalized/routes.jsonl`",
+            "- 상위 후보: `normalized/candidates.json`",
+            "- 수행 범위와 실패: `normalized/coverage.json`",
+            "",
+        ]
+    )
+    destination = run_dir / "summary.md"
+    atomic_write_text(destination, "\n".join(lines))
+    store.add_artifact(state, destination, "summary", "surface")
     store.save(state)
     return destination

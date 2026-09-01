@@ -4,10 +4,8 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
       args:
-        WAYBACKURLS_VERSION: "v0.1.0"
         KATANA_VERSION: "v1.7.0"
-        PARAMETH_COMMIT: "8da6f27c071f00bc0bd26a565de474e7ab5baa42"
-    image: local/hermes-recon-web:0.1
+    image: local/hermes-recon-web:0.2
 
   recon-nuclei:
     build:

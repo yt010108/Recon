@@ -14,7 +14,6 @@ type CliResult = {
   parsed?: unknown;
 };
 
-// Python을 설치 방식에 의존하지 않고 프로젝트의 code/에서 직접 불러온다.
 function pythonInvocation(args: string[]) {
   return process.platform === "win32"
     ? { command: "py", args: ["-3", "-m", "recon_harness.cli", ...args] }
@@ -61,34 +60,57 @@ function toolResult(result: CliResult) {
   };
 }
 
+const scopeParameters = {
+  targets: Type.Array(Type.String(), { minItems: 1, description: "허용 IPv4 또는 CIDR" }),
+  ports: Type.Optional(Type.Array(Type.Integer({ minimum: 1, maximum: 65535 }))),
+  profile: Type.Optional(Type.Union([Type.Literal("fast"), Type.Literal("deep")])),
+  budget_minutes: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })),
+  tls_verify: Type.Optional(Type.Boolean()),
+};
+
+function scopeArgs(params: {
+  targets: string[];
+  ports?: number[];
+  profile?: "fast" | "deep";
+  budget_minutes?: number;
+  tls_verify?: boolean;
+}) {
+  const args = [...params.targets];
+  if (params.ports?.length) args.push("--ports", params.ports.join(","));
+  if (params.profile) args.push("--profile", params.profile);
+  if (params.budget_minutes) args.push("--budget-minutes", String(params.budget_minutes));
+  if (params.tls_verify) args.push("--tls-verify");
+  return args;
+}
+
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "recon_create",
-    label: "Recon: Run 생성",
-    description: "Create a scoped run without sending network requests.",
-    parameters: Type.Object({
-      domain: Type.String(),
-    }),
+    label: "Recon V2: Run 생성",
+    description: "Create a scoped competition web Recon V2 run without network requests.",
+    parameters: Type.Object(scopeParameters),
     async execute(_toolCallId, params, signal) {
-      return toolResult(await runCli(["create", params.domain], signal));
+      return toolResult(await runCli(["create", ...scopeArgs(params)], signal));
     },
   });
 
   pi.registerTool({
     name: "recon_run",
-    label: "Recon: 개별 실행",
-    description: "Run one stage or one tool inside an existing scoped run.",
+    label: "Recon V2: 단계 실행",
+    description: "Run one decision stage or tool in an existing V2 run.",
     parameters: Type.Object({
       run_id: Type.String(),
       target: Type.Union([
-        Type.Literal("collect"), Type.Literal("probe"), Type.Literal("crawl"), Type.Literal("discovery"),
-        Type.Literal("dorkgen"), Type.Literal("subfinder"), Type.Literal("assetfinder"), Type.Literal("amass_enum"), Type.Literal("waybackurls"),
-        Type.Literal("httpx"), Type.Literal("robots_txt"), Type.Literal("katana"), Type.Literal("source_comments"),
-        Type.Literal("nuclei"), Type.Literal("gobuster_dir"), Type.Literal("parameth"),
+        Type.Literal("inventory"), Type.Literal("mapping"),
+        Type.Literal("normalize"), Type.Literal("expansion"),
+        Type.Literal("network_discovery"), Type.Literal("httpx"),
+        Type.Literal("robots_txt"), Type.Literal("katana"),
+        Type.Literal("source_comments"), Type.Literal("surface"),
+        Type.Literal("gobuster_dir"), Type.Literal("nuclei"),
       ]),
     }),
     async execute(_toolCallId, params, signal) {
-      const stages = new Set(["collect", "probe", "crawl", "discovery"]);
+      const stages = new Set(["inventory", "mapping", "normalize", "expansion"]);
       const command = stages.has(params.target) ? "stage" : "tool";
       return toolResult(await runCli([command, "--run", params.run_id, params.target], signal));
     },
@@ -96,8 +118,8 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "recon_report",
-    label: "Recon: 보고서 갱신",
-    description: "Rebuild report.md from stored artifacts without network requests.",
+    label: "Recon V2: 요약 갱신",
+    description: "Rebuild normalized routes, top candidates and summary without network requests.",
     parameters: Type.Object({ run_id: Type.String() }),
     async execute(_toolCallId, params, signal) {
       return toolResult(await runCli(["report", "--run", params.run_id], signal));
@@ -105,21 +127,9 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "recon_start",
-    label: "Recon: 시작",
-    description: "Run complete recon for one allowed domain. Nuclei is available separately through recon_run.",
-    parameters: Type.Object({
-      domain: Type.String({ description: "The single allowed domain" }),
-    }),
-    async execute(_toolCallId, params, signal) {
-      return toolResult(await runCli(["start", params.domain], signal));
-    },
-  });
-
-  pi.registerTool({
     name: "recon_status",
-    label: "Recon: 상태",
-    description: "Read a stored run without sending network requests.",
+    label: "Recon V2: 상태",
+    description: "Read one V2 run without sending network requests.",
     parameters: Type.Object({ run_id: Type.String() }),
     async execute(_toolCallId, params, signal) {
       return toolResult(await runCli(["status", "--run", params.run_id], signal));

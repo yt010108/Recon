@@ -6,7 +6,7 @@ STAGE_TOOLS = {
     "collect": ("dorkgen", "subfinder", "assetfinder", "amass_enum", "waybackurls"),
     "probe": ("httpx", "robots_txt"),
     "crawl": ("katana", "source_comments"),
-    "discovery": ("url_discovery", "gobuster_dir", "parameth"),
+    "discovery": ("url_discovery", "gobuster_dir"),
     "normalize": ("surface",),
 }
 
@@ -15,6 +15,7 @@ TOOL_STAGES = {
     tool: stage for stage, tools in STAGE_TOOLS.items() for tool in tools
 }
 TOOL_STAGES["nuclei"] = "probe"
+TOOL_STAGES["parameth"] = "discovery"
 INTERNAL_TOOLS = frozenset({"url_discovery"})
 TOOL_NAMES = frozenset(TOOL_STAGES) - INTERNAL_TOOLS
 LOCAL_TOOLS = frozenset({"dorkgen", "surface"})
@@ -34,7 +35,7 @@ def tools_for_stage(stage: str) -> tuple[str, ...]:
 
 def stage_for_tool(tool: str) -> str:
     normalized = tool.strip().lower()
-    if normalized in TOOL_NAMES:
+    if normalized in TOOL_STAGES:
         return TOOL_STAGES[normalized]
     choices = ", ".join(sorted(TOOL_NAMES))
     raise ValueError(f"Unknown tool {tool!r}; expected one of: {choices}")

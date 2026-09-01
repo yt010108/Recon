@@ -12,7 +12,7 @@ from .models import LOCAL_TOOLS, STAGE_ORDER, stage_for_tool, tools_for_stage, v
 from .policy import PolicyError, ScopePolicy
 from .storage import RunStore, utc_now
 from .surface import run_local_surface
-from .tools import run_local_dorkgen
+from .tools import ToolOutcome, run_local_dorkgen
 
 
 class HarnessRunner:
@@ -89,6 +89,14 @@ class HarnessRunner:
                 if stage_state["tools"].get(tool, {}).get("status") != "completed"
             ]
             outcomes = []
+            if normalized == "discovery":
+                optional = {
+                    "gobuster_dir": policy.run_gobuster,
+                }
+                for tool, enabled in optional.items():
+                    if tool in pending_tools and not enabled:
+                        outcomes.append((tool, ToolOutcome(0, "Disabled for this run", skipped=True)))
+                        pending_tools.remove(tool)
             if normalized == "collect" and "dorkgen" in pending_tools:
                 outcomes.append(("dorkgen", self._run_local_tool("dorkgen", policy, state)))
                 pending_tools.remove("dorkgen")
@@ -149,13 +157,18 @@ class HarnessRunner:
             else "ready"
         )
         self.store.save(state)
+        from .reporting import build_stage_report
+
+        build_stage_report(self.store, state, normalized)
         return state
 
     def run_stage(self, run_id: str, stage: str) -> dict[str, Any]:
         """선택한 단계만 실행한다. 필요한 입력이 없으면 각 도구의 안전한 기본값을 쓴다."""
         return self._run_stage(run_id, stage, require_previous=False)
 
-    def run_tool(self, run_id: str, tool: str) -> dict[str, Any]:
+    def run_tool(
+        self, run_id: str, tool: str, *, target_url: str | None = None
+    ) -> dict[str, Any]:
         """선택한 도구 하나만 실행하고 같은 run에 결과를 누적한다."""
         stage = stage_for_tool(tool)
         state = self.store.load(run_id)
@@ -171,11 +184,15 @@ class HarnessRunner:
         state["status"] = "running"
         self.store.save(state)
         try:
-            outcome = (
-                self._run_local_tool(tool, policy, state)
-                if tool in LOCAL_TOOLS
-                else DeepDiscoveryToolRunner(backend, self.store, self._io_lock).run(tool, policy, state)
-            )
+            if tool in LOCAL_TOOLS:
+                outcome = self._run_local_tool(tool, policy, state)
+            else:
+                adapter = DeepDiscoveryToolRunner(backend, self.store, self._io_lock)
+                outcome = (
+                    adapter.run_parameth(policy, state, target_url=target_url)
+                    if tool == "parameth"
+                    else adapter.run(tool, policy, state)
+                )
         except (Exception, KeyboardInterrupt) as exc:
             stage_state.update({"status": "failed", "finished_at": utc_now(), "error": str(exc)})
             state["status"] = "failed"
@@ -201,6 +218,9 @@ class HarnessRunner:
             stage_state["status"] = "partial"
         state["status"] = "ready"
         self.store.save(state)
+        from .reporting import build_stage_report
+
+        build_stage_report(self.store, state, stage)
         return state
 
     def run_all(self, run_id: str) -> dict[str, Any]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import threading
@@ -818,18 +819,35 @@ class ToolRunner:
             error=result.stderr.strip(),
         )
 
-    def run_parameth(self, policy: ScopePolicy, state: dict[str, Any]) -> ToolOutcome:
-        target = policy.base_url
+    def run_parameth(
+        self,
+        policy: ScopePolicy,
+        state: dict[str, Any],
+        *,
+        target_url: str | None = None,
+    ) -> ToolOutcome:
+        if not target_url:
+            raise ValueError("Parameth requires one selected target URL")
+        target = target_url
         policy.validate_url(target)
         wordlist = "/opt/recon-wordlists/params-small.txt"
         result = self.backend.run(
             ["parameth", "-u", target, "-p", wordlist],
             process_timeout=1800,
         )
-        self._write_result(state, "parameth", result)
+        target_id = hashlib.sha256(target.encode("utf-8")).hexdigest()[:10]
+        self._write_result(
+            state, f"parameth-{target_id}", result, stage="discovery"
+        )
         findings = [line.strip() for line in result.stdout.splitlines() if line.strip().startswith("[") or "parameter" in line.lower()]
         parsed = self.store.run_dir(state["run_id"]) / "discovery" / "parameth.json"
-        atomic_write_json(parsed, {"target": target, "interesting_lines": findings})
+        try:
+            existing = json.loads(parsed.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = []
+        records = [item for item in existing if isinstance(item, dict) and item.get("target") != target] if isinstance(existing, list) else []
+        records.append({"target": target, "interesting_lines": findings})
+        atomic_write_json(parsed, records)
         self.store.add_artifact(state, parsed, "result", "parameth")
         return ToolOutcome(
             result.exit_code,

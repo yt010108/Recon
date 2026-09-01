@@ -85,13 +85,15 @@ export default function (pi: ExtensionAPI) {
         Type.Literal("collect"), Type.Literal("probe"), Type.Literal("crawl"), Type.Literal("discovery"), Type.Literal("normalize"),
         Type.Literal("dorkgen"), Type.Literal("subfinder"), Type.Literal("assetfinder"), Type.Literal("amass_enum"), Type.Literal("waybackurls"),
         Type.Literal("httpx"), Type.Literal("robots_txt"), Type.Literal("katana"), Type.Literal("source_comments"),
-        Type.Literal("nuclei"), Type.Literal("gobuster_dir"), Type.Literal("parameth"), Type.Literal("surface"),
+        Type.Literal("nuclei"), Type.Literal("url_discovery"), Type.Literal("gobuster_dir"), Type.Literal("parameth"), Type.Literal("surface"),
       ]),
+      target_url: Type.Optional(Type.String({ description: "Selected in-scope URL; required for Parameth" })),
     }),
     async execute(_toolCallId, params, signal) {
       const stages = new Set(["collect", "probe", "crawl", "discovery", "normalize"]);
       const command = stages.has(params.target) ? "stage" : "tool";
-      return toolResult(await runCli([command, "--run", params.run_id, params.target], signal));
+      const targetArgs = params.target_url ? ["--target-url", params.target_url] : [];
+      return toolResult(await runCli([command, "--run", params.run_id, params.target, ...targetArgs], signal));
     },
   });
 
@@ -112,9 +114,13 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       target: Type.String({ description: "The allowed URL, domain or IP" }),
       domain_timeout: Type.Integer({ minimum: 1, maximum: 180, default: 180 }),
+      run_gobuster: Type.Boolean({ default: false }),
     }),
     async execute(_toolCallId, params, signal) {
-      return toolResult(await runCli(["start", params.target, "--domain-timeout", String(params.domain_timeout)], signal));
+      const options = [
+        ...(params.run_gobuster ? ["--gobuster"] : []),
+      ];
+      return toolResult(await runCli(["start", params.target, "--domain-timeout", String(params.domain_timeout), ...options], signal));
     },
   });
 

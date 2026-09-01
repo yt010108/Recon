@@ -262,6 +262,21 @@ class AdapterTests(unittest.TestCase):
             [45, 45, 45, 45],
         )
 
+    def test_parameth_runs_only_for_selected_url_and_accumulates_results(self) -> None:
+        policy = ScopePolicy.load(EXAMPLE_SCOPE)
+        state = self.store.create(policy.path, policy.snapshot())
+        backend = FakeBackend(CommandResult(0, "[+] parameter: debug\n", ""))
+        runner = ToolRunner(backend, self.store)
+        target = "https://example.com/search"
+        runner.run_parameth(policy, state, target_url=target)
+        self.assertEqual(backend.commands[0][:3], ["parameth", "-u", target])
+        run_dir = self.store.run_dir(state["run_id"])
+        records = json.loads((run_dir / "discovery" / "parameth.json").read_text(encoding="utf-8"))
+        self.assertEqual(records[0]["target"], target)
+        self.assertTrue(list((run_dir / "discovery" / "raw").glob("parameth-*.log")))
+        with self.assertRaises(ValueError):
+            runner.run_parameth(policy, state)
+
     def test_nuclei_uses_plain_command_and_keeps_jsonl_findings(self) -> None:
         run_dir = self.store.run_dir(self.state["run_id"])
         (run_dir / "probe" / "alive-urls.txt").write_text(

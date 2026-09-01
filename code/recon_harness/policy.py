@@ -34,6 +34,7 @@ class ScopePolicy:
     docker_network: str | None = None
     worker_image: str = DEFAULT_IMAGE
     domain_timeout: int = DEFAULT_DOMAIN_TIMEOUT
+    run_gobuster: bool = False
     domains: list[str] = field(init=False)
     allowed_ports: list[int] = field(init=False)
     is_ip: bool = field(init=False)
@@ -85,6 +86,7 @@ class ScopePolicy:
             base_url=base_url,
             docker_network=network,
             domain_timeout=scope.get("domain_timeout", DEFAULT_DOMAIN_TIMEOUT),
+            run_gobuster=scope.get("run_gobuster", False),
         )
         policy.validate_url(base_url)
         return policy
@@ -126,6 +128,7 @@ class ScopePolicy:
             "allowed_ports": self.allowed_ports,
             "target_type": "ip" if self.is_ip else "domain",
             "domain_timeout": self.domain_timeout,
+            "run_gobuster": self.run_gobuster,
             "worker_image": self.worker_image,
             "docker_network": self.docker_network,
         }

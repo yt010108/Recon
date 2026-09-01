@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 from . import __version__
 from .docker_backend import DEFAULT_IMAGE, NUCLEI_IMAGE, BackendError, DockerBackend
-from .models import LOCAL_TOOLS, STAGE_ORDER, TOOL_NAMES
+from .models import INTERNAL_TOOLS, LOCAL_TOOLS, STAGE_ORDER, TOOL_NAMES, stage_for_tool
 from .policy import DEFAULT_DOMAIN_TIMEOUT, PolicyError, ScopePolicy
 from .reporting import build_report
 from .runner import HarnessRunner
@@ -38,7 +38,12 @@ def normalize_domain(value: str) -> str:
     return normalize_target(value)[0]
 
 
-def render_scope_toml(target: str, domain_timeout: int = DEFAULT_DOMAIN_TIMEOUT) -> str:
+def render_scope_toml(
+    target: str,
+    domain_timeout: int = DEFAULT_DOMAIN_TIMEOUT,
+    *,
+    run_gobuster: bool = False,
+) -> str:
     host, base_url = normalize_target(target)
     if not 1 <= domain_timeout <= 180:
         raise ValueError("Domain timeout must be between 1 and 180 seconds")
@@ -47,6 +52,7 @@ def render_scope_toml(target: str, domain_timeout: int = DEFAULT_DOMAIN_TIMEOUT)
         f"domain = {json.dumps(host, ensure_ascii=False)}",
         f"base_url = {json.dumps(base_url, ensure_ascii=False)}",
         f"domain_timeout = {domain_timeout}",
+        f"run_gobuster = {str(run_gobuster).lower()}",
     ]
     return "\n".join([*lines, ""])
 
@@ -65,6 +71,7 @@ def _state_summary(state: dict[str, Any]) -> dict[str, Any]:
         "status": state["status"],
         "target": state["scope"]["base_url"],
         "domain_timeout": state["scope"].get("domain_timeout", DEFAULT_DOMAIN_TIMEOUT),
+        "run_gobuster": state["scope"].get("run_gobuster", False),
         "stages": {
             name: {
                 "status": item["status"],
@@ -77,12 +84,21 @@ def _state_summary(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _create_run(target: str, domain_timeout: int = DEFAULT_DOMAIN_TIMEOUT) -> tuple[RunStore, dict[str, Any]]:
+def _create_run(
+    target: str,
+    domain_timeout: int = DEFAULT_DOMAIN_TIMEOUT,
+    *,
+    run_gobuster: bool = False,
+) -> tuple[RunStore, dict[str, Any]]:
     store = _store()
     with tempfile.TemporaryDirectory(prefix="recon-scope-") as temporary:
         scope_path = Path(temporary) / "scope.toml"
         scope_path.write_text(
-            render_scope_toml(target, domain_timeout),
+            render_scope_toml(
+                target,
+                domain_timeout,
+                run_gobuster=run_gobuster,
+            ),
             encoding="utf-8",
             newline="\n",
         )
@@ -110,13 +126,21 @@ def _emit_with_report(store: RunStore, state: dict[str, Any]) -> int:
 
 
 def cmd_create(args: argparse.Namespace) -> int:
-    _store_value, state = _create_run(args.target, args.timeout)
+    _store_value, state = _create_run(
+        args.target,
+        args.timeout,
+        run_gobuster=args.gobuster,
+    )
     _emit(_state_summary(state))
     return 0
 
 
 def cmd_start(args: argparse.Namespace) -> int:
-    store, state = _create_run(args.target, args.timeout)
+    store, state = _create_run(
+        args.target,
+        args.timeout,
+        run_gobuster=args.gobuster,
+    )
 
     state = HarnessRunner(store).run_all(state["run_id"])
     return _emit_with_report(store, state)
@@ -125,13 +149,22 @@ def cmd_start(args: argparse.Namespace) -> int:
 def cmd_stage(args: argparse.Namespace) -> int:
     store = _store()
     state = HarnessRunner(store).run_stage(args.run, args.stage)
-    return _emit_with_report(store, state)
+    return _emit_with_stage_report(store, state, args.stage)
 
 
 def cmd_tool(args: argparse.Namespace) -> int:
     store = _store()
-    state = HarnessRunner(store).run_tool(args.run, args.tool)
-    return _emit_with_report(store, state)
+    state = HarnessRunner(store).run_tool(
+        args.run, args.tool, target_url=args.target_url
+    )
+    return _emit_with_stage_report(store, state, stage_for_tool(args.tool))
+
+
+def _emit_with_stage_report(store: RunStore, state: dict[str, Any], stage: str) -> int:
+    summary = _state_summary(store.load(state["run_id"]))
+    summary["report"] = str(store.run_dir(state["run_id"]) / stage / "report.md")
+    _emit(summary)
+    return 0
 
 
 def cmd_report(args: argparse.Namespace) -> int:
@@ -196,11 +229,13 @@ def build_parser() -> argparse.ArgumentParser:
     start = commands.add_parser("start", help="Run recon for one allowed URL, domain or IP")
     start.add_argument("target")
     start.add_argument("--domain-timeout", dest="timeout", type=int, default=DEFAULT_DOMAIN_TIMEOUT, metavar="SECONDS")
+    start.add_argument("--gobuster", action="store_true")
     start.set_defaults(handler=cmd_start)
 
     create = commands.add_parser("create", help="Create a run without network requests")
     create.add_argument("target")
     create.add_argument("--domain-timeout", dest="timeout", type=int, default=DEFAULT_DOMAIN_TIMEOUT, metavar="SECONDS")
+    create.add_argument("--gobuster", action="store_true")
     create.set_defaults(handler=cmd_create)
 
     stage = commands.add_parser("stage", help="Run one stage in an existing run")
@@ -210,7 +245,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     tool = commands.add_parser("tool", help="Run one tool in an existing run")
     tool.add_argument("--run", required=True)
-    tool.add_argument("tool", choices=sorted(TOOL_NAMES))
+    tool.add_argument("tool", choices=sorted(TOOL_NAMES | INTERNAL_TOOLS))
+    tool.add_argument("--target-url")
     tool.set_defaults(handler=cmd_tool)
 
     report = commands.add_parser("report", help="Rebuild one run report offline")

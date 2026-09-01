@@ -14,12 +14,18 @@ from recon_harness.tools import ToolOutcome
 
 
 class RunnerSelectionTests(unittest.TestCase):
-    def _created_run(self):
+    def _created_run(self, *, run_optional: bool = False):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         scope_path = root / "scope.toml"
-        scope_path.write_text(render_scope_toml("example.com"), encoding="utf-8")
+        scope_path.write_text(
+            render_scope_toml(
+                "example.com",
+                run_gobuster=run_optional,
+            ),
+            encoding="utf-8",
+        )
         policy = ScopePolicy.load(scope_path)
         store = RunStore(root / "runs")
         state = store.create(scope_path, policy.snapshot())
@@ -53,7 +59,7 @@ class RunnerSelectionTests(unittest.TestCase):
         self.assertEqual(called, ["collect", "probe", "crawl", "discovery", "normalize"])
 
     def test_failed_tool_is_preserved_in_overall_status(self) -> None:
-        store, state = self._created_run()
+        store, state = self._created_run(run_optional=True)
         runner = HarnessRunner(store)
         for stage in ("collect", "probe", "crawl", "normalize"):
             state["stages"][stage]["status"] = "completed"
@@ -66,7 +72,6 @@ class RunnerSelectionTests(unittest.TestCase):
             tools.return_value.run.side_effect = [
                 ToolOutcome(0, "url discovery", 1),
                 ToolOutcome(1, "gobuster failed", 0, error="failed"),
-                ToolOutcome(0, "parameth", 1),
             ]
             finished = runner.run_stage(state["run_id"], "discovery")
 
@@ -75,6 +80,21 @@ class RunnerSelectionTests(unittest.TestCase):
             "completed_with_errors",
         )
         self.assertEqual(finished["status"], "completed_with_errors")
+
+    def test_discovery_skips_optional_tools_when_not_selected(self) -> None:
+        store, state = self._created_run()
+        runner = HarnessRunner(store)
+        with (
+            patch.object(runner, "_backend_for_tool", return_value=object()),
+            patch("recon_harness.runner.DeepDiscoveryToolRunner") as tools,
+        ):
+            tools.return_value.run.return_value = ToolOutcome(0, "url discovery", 1)
+            finished = runner.run_stage(state["run_id"], "discovery")
+        tool_states = finished["stages"]["discovery"]["tools"]
+        self.assertEqual(tools.return_value.run.call_count, 1)
+        self.assertEqual(tool_states["url_discovery"]["status"], "completed")
+        self.assertEqual(tool_states["gobuster_dir"]["status"], "skipped")
+        self.assertTrue((store.run_dir(state["run_id"]) / "discovery" / "report.md").is_file())
 
     def test_one_stage_can_run_without_previous_stage(self) -> None:
         store, state = self._created_run()
@@ -102,6 +122,9 @@ class RunnerSelectionTests(unittest.TestCase):
             result = HarnessRunner(store).run_tool(state["run_id"], "dorkgen")
         backend.assert_not_called()
         self.assertEqual(result["stages"]["collect"]["tools"]["dorkgen"]["status"], "completed")
+        run_dir = store.run_dir(state["run_id"])
+        self.assertTrue((run_dir / "collect" / "report.md").is_file())
+        self.assertFalse((run_dir / "report.md").exists())
 
     def test_domain_collectors_run_in_parallel(self) -> None:
         store, state = self._created_run()

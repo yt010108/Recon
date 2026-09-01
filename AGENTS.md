@@ -9,9 +9,10 @@
 1. `전체 자동` 또는 `구간 수동`을 묻는다.
 2. 허가받은 도메인·URL·IP를 묻는다.
 3. 도메인 탐색 전체 제한시간을 초 단위로 한 번 묻는다. 기본값과 최대값은 180초다.
-4. `전체 자동`이면 `recon_start`로 모든 단계를 실행하고 결과를 요약한다.
+4. `전체 자동`이면 Gobuster 실행 여부를 묻고 `recon_start`로 모든 단계를 실행한다. Parameth는 자동 실행하지 않는다.
 5. `구간 수동`이면 `recon_create` 후 `collect`를 실행한다. 결과와 `collect/domains.txt` 요약을 보여주고 다음 진행 여부를 묻는다.
-6. 사용자 확인을 받을 때마다 `probe` → `crawl` → `discovery` → `normalize`를 하나씩 실행한다. 각 단계 뒤 결과와 실패를 짧게 알리고 다시 확인한다.
+6. 사용자 확인을 받을 때마다 `probe`와 `crawl`을 실행한다. Discovery에서는 URL Discovery를 먼저 실행하고 Gobuster 실행 여부를 묻는다. Parameth는 후보 URL을 보여주고 사용자가 URL을 선택했을 때만 실행한다.
+7. 각 단계의 `<단계>/report.md`를 보여준다. Normalize 후에만 루트 `report.md` 최종본을 만든다.
 
 기존 run ID가 있으면 새 run을 만들지 말고 이어서 실행한다. Nuclei는 사용자가 별도로 요청할 때만 기존 run에서 단독 실행한다.
 
@@ -23,11 +24,13 @@
 | collect   | Dorkgen, Subfinder, Assetfinder, Amass passive, Waybackurls | 도메인과 과거 URL 수집           |
 | probe     | HTTPX, robots.txt                                           | 살아 있는 HTTP 대상과 기본 노출 확인  |
 | crawl     | Katana, source_comments                                     | 페이지·스크립트·주석·엔드포인트 수집     |
-| discovery | url_discovery, Gobuster dir, Parameth                       | URL 재확인과 경로·파라미터 탐색      |
+| discovery | url_discovery, 선택형 Gobuster, 수동 Parameth              | URL 재확인과 경로·파라미터 탐색      |
 | normalize | surface                                                     | 중복을 기능 route로 정리하고 후보 선정 |
 
 
 Collect에서 Subfinder, Assetfinder, Amass, Waybackurls는 동시에 시작한다. 도구별 설정은 두지 않고 병렬 도메인 탐색 구간 전체에 하나의 `domain_timeout` 값만 사용하며 최대 180초다. Subfinder·Assetfinder·Amass 결과는 스코프 검사 후 정렬·중복 제거하여 `collect/domains.txt`에 합친다. 병렬 쓰기는 하나의 잠금으로만 보호한다.
+
+URL Discovery는 Discovery의 기본 작업이고 Gobuster는 선택 도구다. Parameth는 자동 단계에서 제외한다. Discovery가 `parameth-targets.txt`를 만들고 사용자가 URL을 선택했을 때만 해당 URL에 실행한다. URL Discovery·Gobuster·선택 실행한 Parameth 결과는 즉시 `discovery/report.md`의 하나의 경로 트리로 합친다.
 
 ## 결과 구조
 
@@ -38,15 +41,20 @@ runs/<RUN_ID>/
 ├── report.md
 ├── collect/
 │   ├── raw/
+│   ├── report.md
 │   └── domains.txt
 ├── probe/
-│   └── raw/
+│   ├── raw/
+│   └── report.md
 ├── crawl/
-│   └── raw/
+│   ├── raw/
+│   └── report.md
 ├── discovery/
-│   └── raw/
+│   ├── raw/
+│   └── report.md
 ├── normalize/
 │   ├── raw/
+│   ├── report.md
 │   ├── routes.jsonl
 │   ├── candidates.json
 │   └── coverage.json
@@ -54,6 +62,8 @@ runs/<RUN_ID>/
 ```
 
 `progress.md`가 실행 상태와 재개 기준이다. 각 단계의 원본만 `<단계>/raw/`에 두고, 가공 결과는 별도 result/parsed 폴더 없이 `<단계>/` 바로 아래에 둔다. `runs/`와 자격 증명은 커밋하지 않는다.
+
+`report.md`에는 중요 route 최대 50개를 도메인·경로 트리 형태의 사이트맵으로 표시한다. 사이트맵에는 Method, 파라미터, 중요도만 넣고 발견 소스는 넣지 않는다. 별도 중요 소스 정보에는 중요 엔드포인트 20개, 보안 관련 주석 10개, source map·manifest·동적 chunk 등 중요 자산 10개만 표시한다. 원본 수집량은 줄이지 않으며 민감한 값은 보고서에서 가린다.
 
 ## 코드 위치와 규칙
 

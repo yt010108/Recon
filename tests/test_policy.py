@@ -50,8 +50,7 @@ class ScopePolicyTests(unittest.TestCase):
         self.assertEqual(stage_for_tool("source_comments"), "crawl")
         self.assertIn("url_discovery", tools_for_stage("discovery"))
         self.assertNotIn("url_discovery", TOOL_NAMES)
-        with self.assertRaises(ValueError):
-            stage_for_tool("url_discovery")
+        self.assertEqual(stage_for_tool("url_discovery"), "discovery")
         self.assertNotIn("nuclei", tools_for_stage("probe"))
 
     def test_url_scope_preserves_base_url(self) -> None:
@@ -81,6 +80,19 @@ class ScopePolicyTests(unittest.TestCase):
             path.write_text(render_scope_toml("example.com", 45), encoding="utf-8")
             policy = ScopePolicy.load(path)
         self.assertEqual(policy.domain_timeout, 45)
+
+    def test_optional_discovery_tools_are_stored_per_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "scope.toml"
+            path.write_text(
+                render_scope_toml(
+                    "example.com",
+                    run_gobuster=True,
+                ),
+                encoding="utf-8",
+            )
+            policy = ScopePolicy.load(path)
+        self.assertTrue(policy.run_gobuster)
 
 
 if __name__ == "__main__":

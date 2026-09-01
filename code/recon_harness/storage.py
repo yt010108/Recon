@@ -1,4 +1,4 @@
-"""run 상태와 산출물을 원자적으로 저장한다."""
+"""런 상태와 진행 상황을 progress.md 하나에 보존한다."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ def _slug(value: str) -> str:
 
 
 def atomic_write_text(path: Path, text: str) -> None:
+    """중단 중에도 진행 파일이 반쯤 쓰이지 않도록 원자적으로 교체한다."""
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
@@ -41,6 +42,7 @@ def atomic_write_text(path: Path, text: str) -> None:
 
 
 def atomic_write_json(path: Path, payload: Any) -> None:
+    """파싱 결과 JSON도 같은 방식으로 안전하게 기록한다."""
     atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
 
 
@@ -53,14 +55,14 @@ class RunStore:
         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         run_id = f"{stamp}-{_slug(scope_snapshot['name'])}-{uuid.uuid4().hex[:6]}"
         run_dir = self.root / run_id
-        for name in ("raw", "parsed", "normalized", "screenshots", ".worker-inputs"):
-            (run_dir / name).mkdir(parents=True)
+        (run_dir / "raw").mkdir(parents=True)
+        (run_dir / "parsed").mkdir()
+        (run_dir / "normalized").mkdir()
+        (run_dir / "screenshots").mkdir()
         state = {
-            "schema_version": 2,
             "run_id": run_id,
             "status": "ready",
             "created_at": utc_now(),
-            "budget_started_at": None,
             "updated_at": utc_now(),
             "scope": scope_snapshot,
             "stages": {
@@ -88,16 +90,9 @@ class RunStore:
         return path
 
     def load(self, run_id: str) -> dict[str, Any]:
-        run_dir = self.run_dir(run_id)
-        state_path = run_dir / "state.json"
+        path = self.run_dir(run_id) / "progress.md"
         try:
-            return json.loads(state_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            pass
-
-        # V1 run은 읽기 전용 호환 경로로 남긴다.
-        try:
-            text = (run_dir / "progress.md").read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8")
             payload = text.split("<!-- recon-state\n", 1)[1].split("\n-->", 1)[0]
             return json.loads(payload)
         except (OSError, IndexError, json.JSONDecodeError) as exc:
@@ -105,8 +100,6 @@ class RunStore:
 
     def save(self, state: dict[str, Any]) -> None:
         state["updated_at"] = utc_now()
-        run_dir = self.run_dir(state["run_id"])
-        atomic_write_json(run_dir / "state.json", state)
         self._write_progress(state)
 
     def _write_progress(self, state: dict[str, Any]) -> None:
@@ -114,29 +107,30 @@ class RunStore:
             (
                 stage
                 for stage in STAGE_ORDER
-                if state["stages"].get(stage, {}).get("status") in {"pending", "failed", "partial"}
+                if state["stages"][stage]["status"] in {"pending", "failed"}
             ),
             "complete",
         )
-        scope = state["scope"]
         lines = [
             f"# Recon progress: {state['run_id']}",
             "",
-            f"- Target: `{scope.get('target_label', '-')}`",
-            f"- Profile: `{scope.get('profile', 'fast')}`",
+            f"- Target: `{state['scope']['base_url']}`",
             f"- Status: `{state['status']}`",
             f"- Updated: `{state['updated_at']}`",
+            f"- Artifacts: `{len(state['artifacts'])}`",
             f"- Next: `{next_stage}`",
             "",
             "| Stage | Status | Tools |",
             "|---|---|---|",
         ]
         for stage in STAGE_ORDER:
-            item = state["stages"].get(stage, {})
-            tools = ", ".join(item.get("tools", {})) or "-"
-            lines.append(f"| {stage} | {item.get('status', 'pending')} | {tools} |")
-        lines.extend(["", "정식 상태는 `state.json`에 저장된다.", ""])
-        atomic_write_text(self.run_dir(state["run_id"]) / "progress.md", "\n".join(lines))
+            item = state["stages"][stage]
+            tools = ", ".join(item["tools"]) if item["tools"] else "-"
+            lines.append(f"| {stage} | {item['status']} | {tools} |")
+        lines.extend(["", "이 파일만으로 실행 상태를 확인하고 재개한다.", ""])
+        metadata = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+        content = f"<!-- recon-state\n{metadata}\n-->\n\n" + "\n".join(lines)
+        atomic_write_text(self.run_dir(state["run_id"]) / "progress.md", content)
 
     def add_artifact(self, state: dict[str, Any], path: Path, kind: str, tool: str) -> None:
         relative = path.resolve().relative_to(self.run_dir(state["run_id"]))
@@ -146,11 +140,9 @@ class RunStore:
 
     def list_runs(self) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
-        for run_dir in self.root.iterdir():
-            if not run_dir.is_dir():
-                continue
+        for progress_path in self.root.glob("*/progress.md"):
             try:
-                results.append(self.load(run_dir.name))
+                results.append(self.load(progress_path.parent.name))
             except FileNotFoundError:
                 continue
         return sorted(results, key=lambda item: item.get("created_at", ""), reverse=True)

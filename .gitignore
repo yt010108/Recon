@@ -10,15 +10,15 @@ workspace/
 # Run artifacts (never commit recon output)
 runs/
 
+# Local runtimes
+.venv/
+node_modules/
+
 # Local Pi/runtime state
 .runtime/
 
 # Python build/test caches
-.venv/
 __pycache__/
 *.pyc
 .pytest_cache/
 *.egg-info/
-
-# Local JavaScript dependencies
-node_modules/

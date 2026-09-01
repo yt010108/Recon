@@ -1,7 +1,7 @@
 [project]
 name = "recon-harness"
 version = "0.2.0"
-description = "Policy-gated competition web recon with normalized routes and prioritized candidates"
+description = "General web recon with full collection and prioritized normalized routes"
 requires-python = ">=3.11"
 dependencies = []
 
@@ -10,6 +10,7 @@ recon-harness = "recon_harness.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "code"}
+py-modules = ["dorkgen"]
 
 [tool.setuptools.packages.find]
 where = ["code"]

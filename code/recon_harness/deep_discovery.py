@@ -1,4 +1,4 @@
-"""정적 프런트엔드 자산에서 endpoint 근거를 보강한다."""
+"""더 깊은 Katana 크롤링과 정적 프런트엔드 자산 분석."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from .policy import PolicyError, ScopePolicy
-from .storage import atomic_write_json
+from .storage import RunStore, atomic_write_json
 from .tools import (
     ToolOutcome,
     ToolRunner,
@@ -18,13 +18,13 @@ from .tools import (
     _extract_c_style_comments,
     _extract_html_comments,
     _extract_source_endpoints,
+    _katana_scope_regexes,
     _response_body,
     _unique_lines,
 )
 
 
-MAX_SOURCE_RESPONSES = 80
-MAX_SECONDARY_SOURCE_RESPONSES = 120
+KATANA_DEPTH = 4
 
 _JS_ASSIGNMENT_RE = re.compile(
     r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]+)"
@@ -413,7 +413,45 @@ def _sourcemap_sources(body: str) -> tuple[list[str], list[str]]:
 
 
 class DeepDiscoveryToolRunner(ToolRunner):
-    """HTML/JavaScript에서 정적으로 확인 가능한 endpoint만 보강한다."""
+    """기본 ToolRunner에 깊은 크롤링과 정적 프런트엔드 자산 추적을 추가한다."""
+
+    def run_url_discovery(
+        self, policy: ScopePolicy, state: dict[str, Any]
+    ) -> ToolOutcome:
+        from .discovery import DiscoveryRunner
+
+        return DiscoveryRunner(self, self.store).run(policy, state)
+
+    def run_katana(self, policy: ScopePolicy, state: dict[str, Any]) -> ToolOutcome:
+        remote = self._copy_lines_input(state, "katana-input.txt", self._live_urls(policy, state))
+        args = [
+            "katana", "-list", remote, "-silent", "-d", str(KATANA_DEPTH),
+            "-jc",
+        ]
+        for pattern in _katana_scope_regexes(policy):
+            args.extend(["-cs", pattern])
+        result = self.backend.run(args, process_timeout=1200)
+        self._write_result(state, "katana", result)
+        urls: list[str] = []
+        for url in _unique_lines(result.stdout):
+            try:
+                policy.validate_url(url)
+            except PolicyError:
+                continue
+            urls.append(url)
+        parsed = self.store.run_dir(state["run_id"]) / "parsed" / "katana-urls.txt"
+        parsed.write_text(
+            "\n".join(sorted(set(urls))) + ("\n" if urls else ""),
+            encoding="utf-8",
+            newline="\n",
+        )
+        self.store.add_artifact(state, parsed, "urls", "katana")
+        return ToolOutcome(
+            result.exit_code,
+            f"Crawled {len(set(urls))} in-scope URLs at depth {KATANA_DEPTH}",
+            len(set(urls)),
+            error=result.stderr.strip(),
+        )
 
     def _fetch_source_records(
         self,
@@ -428,7 +466,7 @@ class DeepDiscoveryToolRunner(ToolRunner):
                 "httpx", "-l", remote, "-silent", "-j", "-sc", "-ct", "-cl",
                 "-irr", "-duc",
             ],
-            process_timeout=max(30, min(300, policy.budget_minutes * 30)),
+            process_timeout=900,
         )
         return result, self._write_sanitized_httpx_result(state, tool_name, result)
 
@@ -438,7 +476,7 @@ class DeepDiscoveryToolRunner(ToolRunner):
         katana_urls = run_dir / "parsed" / "katana-urls.txt"
         if katana_urls.exists():
             urls.extend(_unique_lines(katana_urls.read_text(encoding="utf-8")))
-        candidates = _candidate_source_urls(policy, urls)[:MAX_SOURCE_RESPONSES]
+        candidates = _candidate_source_urls(policy, urls)
         if not candidates:
             return ToolOutcome(
                 0,
@@ -453,7 +491,7 @@ class DeepDiscoveryToolRunner(ToolRunner):
         endpoints: list[dict[str, Any]] = []
         assets: list[dict[str, Any]] = []
         seen_comments: set[tuple[str, int, str, str]] = set()
-        seen_endpoints: set[tuple[str, str, str, str]] = set()
+        seen_endpoints: set[tuple[str, str, str]] = set()
         seen_assets: set[tuple[str, str, str]] = set()
         reviewed_urls: set[str] = set()
         discovered_urls: list[str] = []
@@ -465,12 +503,7 @@ class DeepDiscoveryToolRunner(ToolRunner):
                 endpoint = _resolve_in_scope(policy, source_url, raw_value)
                 if endpoint is None:
                     return
-            key = (
-                source_url,
-                str(candidate.get("kind")),
-                str(candidate.get("method") or "GET").upper(),
-                endpoint or raw_value,
-            )
+            key = (source_url, str(candidate.get("kind")), endpoint or raw_value)
             if key in seen_endpoints:
                 return
             seen_endpoints.add(key)
@@ -563,7 +596,7 @@ class DeepDiscoveryToolRunner(ToolRunner):
             process_record(record, allow_discovery=True)
 
         secondary_result = None
-        secondary_urls = discovered_urls[:MAX_SECONDARY_SOURCE_RESPONSES]
+        secondary_urls = discovered_urls
         if secondary_urls:
             secondary_result, secondary_records = self._fetch_source_records(
                 state, policy, secondary_urls, "source_assets"

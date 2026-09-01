@@ -1,89 +1,82 @@
-# Recon V2
+# Recon
 
-대회에서 허용된 IPv4/CIDR과 포트를 웹 중심으로 정찰하고, URL 목록 대신 기능 단위 route와 상위 검토 후보를 만든다.
+허가받은 URL, 도메인 또는 IP를 Pi와 Docker 작업자로 리콘하는 하네스다. 수집 결과는 모두 보존하고, 첫 보고서는 기능 단위 route와 상위 후보 20개로 정리한다.
 
-## 설계 원칙
-
-```text
-inventory → mapping → normalize → expansion
-```
-
-- `inventory`: Nmap으로 허용 포트를 확인하고 HTTPX로 활성 웹 origin을 만든다.
-- `mapping`: robots.txt와 얕은 Katana crawl을 수행한다. deep 프로필은 소스 endpoint도 분석한다.
-- `normalize`: 값만 다른 URL을 기능 단위 route로 합치고 상위 후보를 최대 20개 선정한다.
-- `expansion`: deep 프로필에서만 각 활성 origin에 Gobuster를 실행한다.
-
-Nuclei는 자동 Workflow에 포함하지 않는다.
-
-## 실행
+## 시작
 
 ```powershell
-cd C:\Users\ytyt\Desktop\security\recon
+cd C:\Users\ytyt\Desktop\security\Recon
 docker compose -f .\docker\compose.yaml build
-
-$env:PYTHONPATH = "$PWD\code"
-py -3 -m recon_harness.cli start 10.10.10.10 --ports 80,443,8080
+pi
 ```
 
-깊은 탐색은 명시적으로 선택한다.
+Pi에서 `/recon`을 입력하면 허용 대상을 묻고 바로 실행한다. Pi extension은 `bash`, `docker run/exec`, 개별 리콘 바이너리의 직접 실행을 차단하지 않는다.
 
-```powershell
-py -3 -m recon_harness.cli start 10.10.10.0/24 `
-  --ports 80,443,8080,8443 `
-  --profile deep `
-  --budget-minutes 15
-```
+전체 실행에는 다음 단계가 들어간다.
 
-대회 인증서가 유효하지 않은 상황을 기본값으로 처리한다. 인증서 검증을 강제하려면 `--tls-verify`를 사용한다.
+| 단계 | 도구 |
+|---|---|
+| collect | Dorkgen, Subfinder, Assetfinder, Amass passive, Waybackurls |
+| probe | HTTPX, `robots.txt` |
+| crawl | Katana, HTML/CSS/JS 주석·엔드포인트 수집 |
+| discovery | 출처 통합 URL 큐·최대 2회 재확인, Gobuster dir, Parameth |
+| normalize | 값만 다른 URL을 기능 route로 합치고 상위 검토 후보 20개 선정 |
 
-## 개별 실행
+Nuclei는 전체 리콘에서 제외했다. 필요할 때 기존 run에 단독 실행하며 결과는 같은 `report.md`에 포함된다. 별도 [Dockerfile.nuclei](docker/Dockerfile.nuclei) 이미지에서 Nuclei `v3.11.1`과 템플릿 `v10.4.7`을 사용하고, 하네스가 템플릿 종류·태그·리다이렉트·Interactsh·속도·동시성을 제한하지 않는다.
 
-```powershell
-py -3 -m recon_harness.cli create 10.10.10.10 --ports 443,8443
-py -3 -m recon_harness.cli stage --run RUN_ID inventory
-py -3 -m recon_harness.cli stage --run RUN_ID mapping
-py -3 -m recon_harness.cli stage --run RUN_ID normalize
-py -3 -m recon_harness.cli tool --run RUN_ID nuclei
-py -3 -m recon_harness.cli report --run RUN_ID
-```
+Docker 실행에도 non-root 강제, read-only rootfs, capability drop, CPU·메모리·PID 제한을 추가하지 않는다. 각 명령이 끝나면 컨테이너만 삭제한다.
 
 ## 결과
 
 ```text
 runs/<RUN_ID>/
 ├── scope.toml
-├── state.json
 ├── progress.md
-├── summary.md
+├── report.md
 ├── raw/
 ├── parsed/
-└── normalized/
-    ├── origins.json
-    ├── routes.jsonl
-    ├── candidates.json
-    └── coverage.json
+├── normalized/
+│   ├── routes.jsonl
+│   ├── candidates.json
+│   └── coverage.json
+└── screenshots/
 ```
 
-처음에는 `summary.md`와 `normalized/candidates.json`만 읽는다. 원본 증거가 필요할 때 `raw/`와 `parsed/`를 확인한다.
+Wayback·robots.txt·Katana·source 결과는 출처를 보존한 `parsed/url-queue.jsonl`로 합친다.
+새 in-scope URL만 HTTPX로 확인하고, 새 live origin과 HTML 후보만 Katana에 최대 2회
+다시 넣는다. 실패한 명령은 같은 round에서 재시도하며, 새 항목이 없으면 즉시 끝낸다.
+큐는 전체 1,000개·origin별 100개, Katana seed는 run 전체에서 origin별 3개로 제한하고
+재확인 Katana는 동시 요청 1개·초당 5개로 실행한다.
 
-route는 origin, method, 정규화한 path, query/body parameter 이름으로 식별한다.
+`scope.toml`은 허용 호스트와 시작 URL을 저장한다.
 
-```text
-GET /view?seq=100
-GET /view?seq=101
-→ GET /view?seq={value}
-
-GET /user/1234
-GET /user/5678
-→ GET /user/{int}
+```toml
+[scope]
+domain = "example.com"
+base_url = "https://example.com"
 ```
 
-## 상태
+Nuclei 원본 JSONL은 `raw/nuclei.jsonl`, 정리 결과는 `parsed/nuclei-findings.json`에 저장되고 `report.md`에 합쳐진다.
 
-- `success`: 활성 웹 표면과 정규화 결과를 만들었다.
-- `partial`: 일부 도구가 실패했거나 Workflow 일부만 수행했다.
-- `no_signal`: 실행은 끝났지만 활성 웹 표면을 확인하지 못했다.
-- `failed`: 실행 자체가 중단됐다.
+## CLI
+
+```powershell
+# 전체 실행
+recon-harness start example.com
+recon-harness start https://example.com/app
+recon-harness start 10.20.30.5
+
+# 개별 실행
+recon-harness create example.com
+recon-harness stage --run RUN_ID crawl
+recon-harness tool --run RUN_ID httpx
+recon-harness tool --run RUN_ID nuclei
+recon-harness report --run RUN_ID
+
+recon-harness list
+recon-harness status --run RUN_ID
+recon-harness doctor
+```
 
 ## 테스트
 
@@ -92,5 +85,3 @@ $env:PYTHONPATH = "$PWD\code"
 py -3 -m unittest discover -s tests -v
 docker compose -f .\docker\compose.yaml config --quiet
 ```
-
-실행 전 대상 소유자나 대회 운영자가 허용한 IPv4/CIDR과 포트를 반드시 확인한다. 발견한 hostname, 리다이렉트나 콘텐츠는 새로운 허가로 취급하지 않는다.

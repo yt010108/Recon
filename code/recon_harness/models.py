@@ -1,40 +1,23 @@
-"""대회용 웹 Recon V2의 단계와 도구 관계."""
+"""리콘 단계와 도구의 고정 관계."""
 
-STAGE_ORDER = ("inventory", "mapping", "normalize", "expansion")
-PROFILES = frozenset({"fast", "deep"})
+STAGE_ORDER = ("collect", "probe", "crawl", "discovery", "normalize")
 
-PROFILE_STAGE_TOOLS = {
-    "fast": {
-        "inventory": ("network_discovery", "httpx"),
-        "mapping": ("robots_txt", "katana"),
-        "normalize": ("surface",),
-        "expansion": (),
-    },
-    "deep": {
-        "inventory": ("network_discovery", "httpx"),
-        "mapping": ("robots_txt", "katana", "source_comments"),
-        "normalize": ("surface",),
-        "expansion": ("gobuster_dir",),
-    },
+STAGE_TOOLS = {
+    "collect": ("dorkgen", "subfinder", "assetfinder", "amass_enum", "waybackurls"),
+    "probe": ("httpx", "robots_txt"),
+    "crawl": ("katana", "source_comments"),
+    "discovery": ("url_discovery", "gobuster_dir", "parameth"),
+    "normalize": ("surface",),
 }
 
+# Nuclei는 전체 recon에 자동 포함하지 않고 필요할 때만 단독 실행한다.
 TOOL_STAGES = {
-    tool: stage
-    for mapping in PROFILE_STAGE_TOOLS.values()
-    for stage, tools in mapping.items()
-    for tool in tools
+    tool: stage for stage, tools in STAGE_TOOLS.items() for tool in tools
 }
-TOOL_STAGES["nuclei"] = "expansion"
-TOOL_NAMES = frozenset(TOOL_STAGES)
-LOCAL_TOOLS = frozenset({"surface"})
-
-
-def validate_profile(profile: str) -> str:
-    normalized = profile.strip().lower()
-    if normalized not in PROFILES:
-        choices = ", ".join(sorted(PROFILES))
-        raise ValueError(f"Unknown profile {profile!r}; expected one of: {choices}")
-    return normalized
+TOOL_STAGES["nuclei"] = "probe"
+INTERNAL_TOOLS = frozenset({"url_discovery"})
+TOOL_NAMES = frozenset(TOOL_STAGES) - INTERNAL_TOOLS
+LOCAL_TOOLS = frozenset({"dorkgen", "surface"})
 
 
 def validate_stage(stage: str) -> str:
@@ -45,13 +28,13 @@ def validate_stage(stage: str) -> str:
     return normalized
 
 
-def tools_for_stage(stage: str, profile: str = "fast") -> tuple[str, ...]:
-    return PROFILE_STAGE_TOOLS[validate_profile(profile)][validate_stage(stage)]
+def tools_for_stage(stage: str) -> tuple[str, ...]:
+    return STAGE_TOOLS[validate_stage(stage)]
 
 
 def stage_for_tool(tool: str) -> str:
     normalized = tool.strip().lower()
-    if normalized in TOOL_STAGES:
+    if normalized in TOOL_NAMES:
         return TOOL_STAGES[normalized]
     choices = ", ".join(sorted(TOOL_NAMES))
     raise ValueError(f"Unknown tool {tool!r}; expected one of: {choices}")

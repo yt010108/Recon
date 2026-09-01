@@ -34,10 +34,10 @@ def build_report(store: RunStore, state: dict[str, Any]) -> Path:
     run_dir = store.run_dir(state["run_id"])
     policy = ScopePolicy.load(run_dir / "scope.toml")
     surface = build_surface(policy, state, store)
-    services = _json(run_dir / "parsed" / "httpx.json", [])
-    nuclei = _json(run_dir / "parsed" / "nuclei-findings.json", [])
-    hosts = _lines(run_dir / "parsed" / "hosts.txt")
-    dorks = _lines(run_dir / "parsed" / "google-dorks.txt")
+    services = _json(run_dir / "probe" / "httpx.json", [])
+    nuclei = _json(run_dir / "probe" / "nuclei-findings.json", [])
+    domains = _lines(run_dir / "collect" / "domains.txt")
+    dorks = _lines(run_dir / "collect" / "google-dorks.txt")
     failures = [
         (stage, tool, result.get("error") or result.get("summary"))
         for stage, stage_state in state["stages"].items()
@@ -46,7 +46,7 @@ def build_report(store: RunStore, state: dict[str, Any]) -> Path:
     ]
     lines = [
         f"# Recon: {policy.base_url}", "", f"- 상태: `{state['status']}`",
-        f"- 수집 호스트: `{len(hosts)}`", f"- 활성 서비스: `{len(services)}`",
+        f"- 수집 도메인: `{len(domains)}`", f"- 활성 서비스: `{len(services)}`",
         f"- 원본 URL 관찰: `{surface['coverage']['observations']}`",
         f"- 기능 단위 route: `{len(surface['routes'])}`",
         f"- 우선 검토 후보: `{len(surface['candidates'])}` / 최대 20",
@@ -73,10 +73,10 @@ def build_report(store: RunStore, state: dict[str, Any]) -> Path:
     else:
         lines.append("기록된 실패가 없다.")
     lines.extend([
-        "", "## 전체 결과 위치", "", "- 원본 출력: `raw/`",
-        "- 도구별 파싱 결과: `parsed/`", "- 전체 route: `normalized/routes.jsonl`",
-        "- 상위 후보: `normalized/candidates.json`", "- 수행 범위: `normalized/coverage.json`",
-        f"- Google Dork: `{len(dorks)}`개 (`parsed/google-dorks.txt`)", "",
+        "", "## 전체 결과 위치", "", "- 단계별 원본 출력: `<단계>/raw/`",
+        "- 단계별 결과: `<단계>/`", "- 전체 route: `normalize/routes.jsonl`",
+        "- 상위 후보: `normalize/candidates.json`", "- 수행 범위: `normalize/coverage.json`",
+        f"- Google Dork: `{len(dorks)}`개 (`collect/google-dorks.txt`)", "",
     ])
     destination = run_dir / "report.md"
     atomic_write_text(destination, "\n".join(lines))

@@ -60,7 +60,8 @@ class ScopePolicyTests(unittest.TestCase):
             rendered = render_scope_toml("https://Example.com/path")
             path.write_text(rendered, encoding="utf-8")
             policy = ScopePolicy.load(path)
-        self.assertEqual(rendered.count("="), 2)
+        self.assertIn("domain_timeout = 180", rendered)
+        self.assertEqual(policy.domain_timeout, 180)
         self.assertEqual(policy.name, "example.com")
         self.assertEqual(policy.base_url, "https://Example.com/path")
 
@@ -73,6 +74,13 @@ class ScopePolicyTests(unittest.TestCase):
         self.assertEqual(policy.validate_url("https://10.20.30.5:8443/admin"), "https://10.20.30.5:8443/admin")
         with self.assertRaises(PolicyError):
             policy.validate_url("https://10.20.30.6:8443/admin")
+
+    def test_domain_timeout_can_be_overridden(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "scope.toml"
+            path.write_text(render_scope_toml("example.com", 45), encoding="utf-8")
+            policy = ScopePolicy.load(path)
+        self.assertEqual(policy.domain_timeout, 45)
 
 
 if __name__ == "__main__":

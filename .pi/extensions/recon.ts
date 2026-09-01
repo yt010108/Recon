@@ -68,9 +68,10 @@ export default function (pi: ExtensionAPI) {
     description: "Create a scoped run without sending network requests.",
     parameters: Type.Object({
       target: Type.String({ description: "Allowed URL, domain or IP" }),
+      domain_timeout: Type.Integer({ minimum: 1, maximum: 180, default: 180 }),
     }),
     async execute(_toolCallId, params, signal) {
-      return toolResult(await runCli(["create", params.target], signal));
+      return toolResult(await runCli(["create", params.target, "--domain-timeout", String(params.domain_timeout)], signal));
     },
   });
 
@@ -110,9 +111,10 @@ export default function (pi: ExtensionAPI) {
     description: "Run complete recon for one allowed URL, domain or IP. Nuclei is available separately.",
     parameters: Type.Object({
       target: Type.String({ description: "The allowed URL, domain or IP" }),
+      domain_timeout: Type.Integer({ minimum: 1, maximum: 180, default: 180 }),
     }),
     async execute(_toolCallId, params, signal) {
-      return toolResult(await runCli(["start", params.target], signal));
+      return toolResult(await runCli(["start", params.target, "--domain-timeout", String(params.domain_timeout)], signal));
     },
   });
 

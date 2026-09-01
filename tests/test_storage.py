@@ -24,6 +24,11 @@ class RunStoreTests(unittest.TestCase):
             self.assertFalse((run_dir / "state.json").exists())
             self.assertFalse((run_dir / "events.jsonl").exists())
             self.assertTrue((run_dir / "screenshots").is_dir())
+            for stage in ("collect", "probe", "crawl", "discovery", "normalize"):
+                self.assertTrue((run_dir / stage / "raw").is_dir())
+            self.assertFalse((run_dir / "raw").exists())
+            self.assertFalse((run_dir / "parsed").exists())
+            self.assertFalse((run_dir / "normalized").exists())
             self.assertTrue((run_dir / "progress.md").is_file())
             loaded = store.load(state["run_id"])
             self.assertEqual(loaded["scope"]["name"], "recon-juice-shop")
@@ -34,7 +39,7 @@ class RunStoreTests(unittest.TestCase):
             store = RunStore(temporary)
             state = store.create(policy.path, policy.snapshot())
             run_dir = store.run_dir(state["run_id"])
-            (run_dir / "parsed" / "source-comments.json").write_text(
+            (run_dir / "crawl" / "source-comments.json").write_text(
                 json.dumps(
                     [
                         {
@@ -47,14 +52,14 @@ class RunStoreTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (run_dir / "parsed" / "hosts.txt").write_text(
+            (run_dir / "collect" / "domains.txt").write_text(
                 "recon-juice-shop\n", encoding="utf-8"
             )
-            (run_dir / "parsed" / "katana-urls.txt").write_text(
+            (run_dir / "crawl" / "katana-urls.txt").write_text(
                 "http://recon-juice-shop:3000/api/orders?id=1\n",
                 encoding="utf-8",
             )
-            (run_dir / "parsed" / "url-queue.jsonl").write_text(
+            (run_dir / "discovery" / "url-queue.jsonl").write_text(
                 json.dumps(
                     {
                         "url": "http://recon-juice-shop:3000/admin?debug=1",
@@ -65,10 +70,10 @@ class RunStoreTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            (run_dir / "parsed" / "google-dorks.txt").write_text(
+            (run_dir / "collect" / "google-dorks.txt").write_text(
                 "site:recon-juice-shop\n", encoding="utf-8"
             )
-            (run_dir / "parsed" / "nuclei-findings.json").write_text(
+            (run_dir / "probe" / "nuclei-findings.json").write_text(
                 json.dumps(
                     [
                         {
@@ -77,7 +82,7 @@ class RunStoreTests(unittest.TestCase):
                             "severity": "low",
                             "matched_at": "http://recon-juice-shop:3000/",
                             "status_code": 200,
-                            "evidence": "raw/nuclei.jsonl:1",
+                            "evidence": "probe/raw/nuclei.jsonl:1",
                         }
                     ]
                 ),
@@ -94,8 +99,8 @@ class RunStoreTests(unittest.TestCase):
             self.assertIn("admin, operation", text)
             self.assertIn("Google Dork: `1`개", text)
             self.assertIn("Nuclei 후보: `1`", text)
-            self.assertTrue((run_dir / "normalized" / "routes.jsonl").is_file())
-            self.assertTrue((run_dir / "normalized" / "candidates.json").is_file())
+            self.assertTrue((run_dir / "normalize" / "routes.jsonl").is_file())
+            self.assertTrue((run_dir / "normalize" / "candidates.json").is_file())
             self.assertNotIn("SAMPLE-ORIGINAL-VALUE", text)
 
     def test_invalid_run_id_is_rejected(self) -> None:

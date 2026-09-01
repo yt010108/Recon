@@ -59,7 +59,7 @@ class DiscoveryTests(unittest.TestCase):
             item["url"]: item
             for item in (
                 json.loads(line)
-                for line in (run_dir / "parsed" / "url-queue.jsonl")
+                for line in (run_dir / "discovery" / "url-queue.jsonl")
                 .read_text(encoding="utf-8")
                 .splitlines()
             )
@@ -67,11 +67,11 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_sources_merge_scope_and_provenance(self) -> None:
         policy, store, state, run_dir = self._run()
-        (run_dir / "parsed" / "source-endpoints.json").write_text(
+        (run_dir / "crawl" / "source-endpoints.json").write_text(
             json.dumps([{"endpoint": "http://recon-juice-shop:3000/api/users"}]),
             encoding="utf-8",
         )
-        (run_dir / "parsed" / "robots.json").write_text(
+        (run_dir / "probe" / "robots.json").write_text(
             json.dumps(
                 [
                     {
@@ -85,10 +85,10 @@ class DiscoveryTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        (run_dir / "parsed" / "katana-urls.txt").write_text(
+        (run_dir / "crawl" / "katana-urls.txt").write_text(
             "http://recon-juice-shop:3000/api/users\n", encoding="utf-8"
         )
-        (run_dir / "parsed" / "wayback-urls.txt").write_text(
+        (run_dir / "collect" / "wayback-urls.txt").write_text(
             "http://recon-juice-shop:3000/old\nhttps://outside.example/path\n",
             encoding="utf-8",
         )
@@ -110,7 +110,7 @@ class DiscoveryTests(unittest.TestCase):
         start = "http://recon-juice-shop:3000/start"
         middle = "http://recon-juice-shop:3000/middle"
         last = "http://recon-juice-shop:3000/last"
-        (run_dir / "parsed" / "wayback-urls.txt").write_text(start + "\n", encoding="utf-8")
+        (run_dir / "collect" / "wayback-urls.txt").write_text(start + "\n", encoding="utf-8")
         backend = FakeBackend(
             CommandResult(0, _record(start) + "\n", ""),
             CommandResult(0, middle + "\n", ""),
@@ -128,7 +128,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_failed_katana_retries_same_round_without_reprobing(self) -> None:
         policy, store, state, run_dir = self._run()
         page = "http://recon-juice-shop:3000/page"
-        (run_dir / "parsed" / "wayback-urls.txt").write_text(page + "\n", encoding="utf-8")
+        (run_dir / "collect" / "wayback-urls.txt").write_text(page + "\n", encoding="utf-8")
 
         first = FakeBackend(
             CommandResult(0, _record(page) + "\n", ""),
@@ -146,12 +146,12 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(outcome.exit_code, 0)
         self.assertEqual(resumed["discovery"]["rounds"], 1)
         self.assertEqual([command[0] for command in second.commands], ["katana"])
-        self.assertTrue((run_dir / "raw" / "discovery-katana-r1.log").is_file())
+        self.assertTrue((run_dir / "discovery" / "raw" / "discovery-katana-r1.log").is_file())
 
     def test_katana_seed_limit_applies_to_run(self) -> None:
         policy, store, state, run_dir = self._run()
         pages = [f"http://recon-juice-shop:3000/page-{i}" for i in range(4)]
-        (run_dir / "parsed" / "wayback-urls.txt").write_text("\n".join(pages) + "\n", encoding="utf-8")
+        (run_dir / "collect" / "wayback-urls.txt").write_text("\n".join(pages) + "\n", encoding="utf-8")
         backend = FakeBackend(
             CommandResult(0, "\n".join(_record(page) for page in pages) + "\n", ""),
             CommandResult(0, "", ""),
@@ -159,7 +159,7 @@ class DiscoveryTests(unittest.TestCase):
 
         DiscoveryRunner(DeepDiscoveryToolRunner(backend, store), store).run(policy, state)
 
-        seeds = (run_dir / "raw" / "discovery-katana-r1-input.txt").read_text(encoding="utf-8").splitlines()
+        seeds = (run_dir / "discovery" / "raw" / "discovery-katana-r1-input.txt").read_text(encoding="utf-8").splitlines()
         self.assertEqual(len(seeds), 3)
 
 

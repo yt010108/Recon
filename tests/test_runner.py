@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -101,6 +102,28 @@ class RunnerSelectionTests(unittest.TestCase):
             result = HarnessRunner(store).run_tool(state["run_id"], "dorkgen")
         backend.assert_not_called()
         self.assertEqual(result["stages"]["collect"]["tools"]["dorkgen"]["status"], "completed")
+
+    def test_domain_collectors_run_in_parallel(self) -> None:
+        store, state = self._created_run()
+        runner = HarnessRunner(store)
+        barrier = threading.Barrier(4)
+        thread_ids: set[int] = set()
+
+        def complete(tool, _policy, _state):
+            thread_ids.add(threading.get_ident())
+            barrier.wait(timeout=2)
+            return ToolOutcome(0, tool, 0)
+
+        with (
+            patch.object(runner, "_run_local_tool", return_value=ToolOutcome(0, "dorkgen", 0)),
+            patch.object(runner, "_backend_for_tool", return_value=object()),
+            patch("recon_harness.runner.DeepDiscoveryToolRunner") as tools,
+        ):
+            tools.return_value.run.side_effect = complete
+            result = runner.run_stage(state["run_id"], "collect")
+
+        self.assertEqual(result["stages"]["collect"]["status"], "completed")
+        self.assertEqual(len(thread_ids), 4)
 
     def test_nuclei_individual_run_uses_dedicated_image(self) -> None:
         store, state = self._created_run()

@@ -33,30 +33,44 @@ runs/<RUN_ID>/
 ├── scope.toml
 ├── progress.md
 ├── report.md
-├── raw/
-├── parsed/
-├── normalized/
+├── collect/
+│   ├── raw/
+│   ├── domains.txt
+│   └── wayback-urls.txt
+├── probe/
+│   ├── raw/
+│   ├── alive-urls.txt
+│   └── httpx.json
+├── crawl/
+│   ├── raw/
+│   └── katana-urls.txt
+├── discovery/
+│   ├── raw/
+│   └── url-queue.jsonl
+├── normalize/
+│   ├── raw/
 │   ├── routes.jsonl
 │   ├── candidates.json
 │   └── coverage.json
 └── screenshots/
 ```
 
-Wayback·robots.txt·Katana·source 결과는 출처를 보존한 `parsed/url-queue.jsonl`로 합친다.
+Wayback·robots.txt·Katana·source 결과는 출처를 보존한 `discovery/url-queue.jsonl`로 합친다.
 새 in-scope URL만 HTTPX로 확인하고, 새 live origin과 HTML 후보만 Katana에 최대 2회
 다시 넣는다. 실패한 명령은 같은 round에서 재시도하며, 새 항목이 없으면 즉시 끝낸다.
 큐는 전체 1,000개·origin별 100개, Katana seed는 run 전체에서 origin별 3개로 제한하고
 재확인 Katana는 동시 요청 1개·초당 5개로 실행한다.
 
-`scope.toml`은 허용 호스트와 시작 URL을 저장한다.
+`scope.toml`은 허용 도메인/IP와 시작 URL을 저장한다.
 
 ```toml
 [scope]
 domain = "example.com"
 base_url = "https://example.com"
+domain_timeout = 180
 ```
 
-Nuclei 원본 JSONL은 `raw/nuclei.jsonl`, 정리 결과는 `parsed/nuclei-findings.json`에 저장되고 `report.md`에 합쳐진다.
+Nuclei 원본 JSONL은 `probe/raw/nuclei.jsonl`, 정리 결과는 `probe/nuclei-findings.json`에 저장되고 `report.md`에 합쳐진다.
 
 ## CLI
 
@@ -65,6 +79,7 @@ Nuclei 원본 JSONL은 `raw/nuclei.jsonl`, 정리 결과는 `parsed/nuclei-findi
 recon-harness start example.com
 recon-harness start https://example.com/app
 recon-harness start 10.20.30.5
+recon-harness start example.com --domain-timeout 120
 
 # 개별 실행
 recon-harness create example.com

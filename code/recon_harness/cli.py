@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 from . import __version__
 from .docker_backend import DEFAULT_IMAGE, NUCLEI_IMAGE, BackendError, DockerBackend
 from .models import LOCAL_TOOLS, STAGE_ORDER, TOOL_NAMES
-from .policy import PolicyError, ScopePolicy
+from .policy import DEFAULT_DOMAIN_TIMEOUT, PolicyError, ScopePolicy
 from .reporting import build_report
 from .runner import HarnessRunner
 from .storage import RunStore
@@ -23,7 +23,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def normalize_target(value: str) -> tuple[str, str]:
-    """URL, 도메인 또는 IP를 호스트와 시작 URL로 정규화한다."""
+    """URL, 도메인 또는 IP를 대상 이름과 시작 URL로 정규화한다."""
     candidate = value.strip()
     explicit_url = "://" in candidate
     parsed = urlsplit(candidate if explicit_url else f"//{candidate}")
@@ -38,14 +38,17 @@ def normalize_domain(value: str) -> str:
     return normalize_target(value)[0]
 
 
-def render_scope_toml(target: str) -> str:
+def render_scope_toml(target: str, domain_timeout: int = DEFAULT_DOMAIN_TIMEOUT) -> str:
     host, base_url = normalize_target(target)
-    return "\n".join([
+    if not 1 <= domain_timeout <= 180:
+        raise ValueError("Domain timeout must be between 1 and 180 seconds")
+    lines = [
         "[scope]",
         f"domain = {json.dumps(host, ensure_ascii=False)}",
         f"base_url = {json.dumps(base_url, ensure_ascii=False)}",
-        "",
-    ])
+        f"domain_timeout = {domain_timeout}",
+    ]
+    return "\n".join([*lines, ""])
 
 
 def _store() -> RunStore:
@@ -61,6 +64,7 @@ def _state_summary(state: dict[str, Any]) -> dict[str, Any]:
         "run_id": state["run_id"],
         "status": state["status"],
         "target": state["scope"]["base_url"],
+        "domain_timeout": state["scope"].get("domain_timeout", DEFAULT_DOMAIN_TIMEOUT),
         "stages": {
             name: {
                 "status": item["status"],
@@ -73,12 +77,12 @@ def _state_summary(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _create_run(target: str) -> tuple[RunStore, dict[str, Any]]:
+def _create_run(target: str, domain_timeout: int = DEFAULT_DOMAIN_TIMEOUT) -> tuple[RunStore, dict[str, Any]]:
     store = _store()
     with tempfile.TemporaryDirectory(prefix="recon-scope-") as temporary:
         scope_path = Path(temporary) / "scope.toml"
         scope_path.write_text(
-            render_scope_toml(target),
+            render_scope_toml(target, domain_timeout),
             encoding="utf-8",
             newline="\n",
         )
@@ -91,18 +95,28 @@ def _emit_with_report(store: RunStore, state: dict[str, Any]) -> int:
     report = build_report(store, state)
     summary = _state_summary(store.load(state["run_id"]))
     summary["report"] = str(report)
+    domains_path = store.run_dir(state["run_id"]) / "collect" / "domains.txt"
+    domains = (
+        [line.strip() for line in domains_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        if domains_path.exists() else []
+    )
+    summary["domains"] = {
+        "count": len(domains),
+        "preview": domains[:20],
+        "path": str(domains_path),
+    }
     _emit(summary)
     return 0
 
 
 def cmd_create(args: argparse.Namespace) -> int:
-    _store_value, state = _create_run(args.target)
+    _store_value, state = _create_run(args.target, args.timeout)
     _emit(_state_summary(state))
     return 0
 
 
 def cmd_start(args: argparse.Namespace) -> int:
-    store, state = _create_run(args.target)
+    store, state = _create_run(args.target, args.timeout)
 
     state = HarnessRunner(store).run_all(state["run_id"])
     return _emit_with_report(store, state)
@@ -181,10 +195,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     start = commands.add_parser("start", help="Run recon for one allowed URL, domain or IP")
     start.add_argument("target")
+    start.add_argument("--domain-timeout", dest="timeout", type=int, default=DEFAULT_DOMAIN_TIMEOUT, metavar="SECONDS")
     start.set_defaults(handler=cmd_start)
 
     create = commands.add_parser("create", help="Create a run without network requests")
     create.add_argument("target")
+    create.add_argument("--domain-timeout", dest="timeout", type=int, default=DEFAULT_DOMAIN_TIMEOUT, metavar="SECONDS")
     create.set_defaults(handler=cmd_create)
 
     stage = commands.add_parser("stage", help="Run one stage in an existing run")

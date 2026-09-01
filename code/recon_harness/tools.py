@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from .docker_backend import CommandResult, DockerBackend
+from .models import stage_for_tool
 from .policy import PolicyError, ScopePolicy
 from .storage import RunStore, atomic_write_json
 from dorkgen import generate_dorks
@@ -31,7 +33,7 @@ def run_local_dorkgen(
     if not policy.is_domain:
         return ToolOutcome(0, "Dork generation requires a domain", skipped=True)
     dorks = generate_dorks(policy.root_domain)
-    destination = store.run_dir(state["run_id"]) / "parsed" / "google-dorks.txt"
+    destination = store.run_dir(state["run_id"]) / "collect" / "google-dorks.txt"
     destination.write_text("\n".join(dorks) + "\n", encoding="utf-8", newline="\n")
     store.add_artifact(state, destination, "queries", "dorkgen")
     return ToolOutcome(0, f"Generated {len(dorks)} Google dork queries offline", len(dorks))
@@ -266,9 +268,11 @@ class ToolRunner:
         self,
         backend: DockerBackend,
         store: RunStore,
+        io_lock: threading.RLock | None = None,
     ) -> None:
         self.backend = backend
         self.store = store
+        self.io_lock = io_lock or threading.RLock()
 
     def _write_result(
         self,
@@ -278,25 +282,30 @@ class ToolRunner:
         *,
         extension: str = "log",
         stdout: str | None = None,
+        stage: str | None = None,
     ) -> None:
-        run_dir = self.store.run_dir(state["run_id"])
-        stdout_path = run_dir / "raw" / f"{tool}.{extension}"
-        stderr_path = run_dir / "raw" / f"{tool}.stderr.log"
-        stdout_path.write_text(
-            result.stdout if stdout is None else stdout,
-            encoding="utf-8",
-            newline="\n",
-        )
-        stderr_path.write_text(result.stderr, encoding="utf-8", newline="\n")
-        self.store.add_artifact(state, stdout_path, "raw", tool)
-        if result.stderr:
-            self.store.add_artifact(state, stderr_path, "stderr", tool)
+        with self.io_lock:
+            run_dir = self.store.run_dir(state["run_id"])
+            output_stage = stage or stage_for_tool(tool)
+            stdout_path = run_dir / output_stage / "raw" / f"{tool}.{extension}"
+            stderr_path = run_dir / output_stage / "raw" / f"{tool}.stderr.log"
+            stdout_path.write_text(
+                result.stdout if stdout is None else stdout,
+                encoding="utf-8",
+                newline="\n",
+            )
+            stderr_path.write_text(result.stderr, encoding="utf-8", newline="\n")
+            self.store.add_artifact(state, stdout_path, "raw", tool)
+            if result.stderr:
+                self.store.add_artifact(state, stderr_path, "stderr", tool)
 
     def _write_sanitized_httpx_result(
         self,
         state: dict[str, Any],
         tool: str,
         result: CommandResult,
+        *,
+        stage: str | None = None,
     ) -> list[dict[str, Any]]:
         """본문은 parsed 증거에만 두고 raw HTTPX 로그에는 안전한 메타데이터만 남긴다."""
         records = _httpx_records(result.stdout)
@@ -306,14 +315,15 @@ class ToolRunner:
             result,
             extension="jsonl",
             stdout=_sanitized_httpx_stdout(records),
+            stage=stage,
         )
         return records
 
     def _copy_lines_input(
-        self, state: dict[str, Any], name: str, lines: list[str]
+        self, state: dict[str, Any], stage: str, name: str, lines: list[str]
     ) -> str:
         run_dir = self.store.run_dir(state["run_id"])
-        local = run_dir / "raw" / name
+        local = run_dir / stage / "raw" / name
         local.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
         remote_dir = self.backend.prepare_remote_dir(state["run_id"])
         remote = f"{remote_dir}/{name}"
@@ -330,53 +340,54 @@ class ToolRunner:
         return run_local_dorkgen(policy, state, self.store)
 
     @staticmethod
-    def _host_in_scope(policy: ScopePolicy, host: str) -> bool:
-        """허용 포트 중 하나를 붙여 호스트가 스코프에 속하는지 확인한다."""
+    def _domain_in_scope(policy: ScopePolicy, domain: str) -> bool:
+        """허용 포트 중 하나를 붙여 도메인이 스코프에 속하는지 확인한다."""
         port = policy.allowed_ports[0]
         for scheme in ("https", "http"):
             try:
-                policy.validate_url(f"{scheme}://{host}:{port}")
+                policy.validate_url(f"{scheme}://{domain}:{port}")
                 return True
             except PolicyError:
                 continue
         return False
 
-    def _merge_hosts(
+    def _merge_domains(
         self,
         policy: ScopePolicy,
         state: dict[str, Any],
         tool: str,
         discovered: list[str],
     ) -> list[str]:
-        """각 수집기의 결과를 검증한 뒤 hosts.txt 하나로 정렬·중복 제거한다."""
-        hosts_path = self.store.run_dir(state["run_id"]) / "parsed" / "hosts.txt"
-        existing = _unique_lines(hosts_path.read_text(encoding="utf-8")) if hosts_path.exists() else []
-        merged: set[str] = {policy.root_domain}
-        for candidate in existing + discovered:
-            host = candidate.strip().lower().removeprefix("*.").rstrip(".")
-            if not host or any(character in host for character in "/@? #"):
-                continue
-            if not self._host_in_scope(policy, host):
-                continue
-            merged.add(host)
-        ordered = sorted(merged)
-        hosts_path.parent.mkdir(parents=True, exist_ok=True)
-        hosts_path.write_text("\n".join(ordered) + "\n", encoding="utf-8", newline="\n")
-        self.store.add_artifact(state, hosts_path, "hosts", tool)
+        """각 수집기의 결과를 검증한 뒤 domains.txt로 정렬·중복 제거한다."""
+        with self.io_lock:
+            domains_path = self.store.run_dir(state["run_id"]) / "collect" / "domains.txt"
+            existing = _unique_lines(domains_path.read_text(encoding="utf-8")) if domains_path.exists() else []
+            merged: set[str] = {policy.root_domain}
+            for candidate in existing + discovered:
+                domain = candidate.strip().lower().removeprefix("*.").rstrip(".")
+                if not domain or any(character in domain for character in "/@? #"):
+                    continue
+                if not self._domain_in_scope(policy, domain):
+                    continue
+                merged.add(domain)
+            ordered = sorted(merged)
+            domains_path.parent.mkdir(parents=True, exist_ok=True)
+            domains_path.write_text("\n".join(ordered) + "\n", encoding="utf-8", newline="\n")
+            self.store.add_artifact(state, domains_path, "domains", tool)
         return ordered
 
     def run_subfinder(self, policy: ScopePolicy, state: dict[str, Any]) -> ToolOutcome:
         if not policy.is_domain:
             return ToolOutcome(0, "Subfinder requires a domain", skipped=True)
         result = self.backend.run(
-            ["subfinder", "-d", policy.root_domain, "-silent"], process_timeout=240
+            ["subfinder", "-d", policy.root_domain, "-silent"], process_timeout=policy.domain_timeout
         )
         self._write_result(state, "subfinder", result)
-        hosts = self._merge_hosts(policy, state, "subfinder", _unique_lines(result.stdout))
+        domains = self._merge_domains(policy, state, "subfinder", _unique_lines(result.stdout))
         return ToolOutcome(
             result.exit_code,
-            f"Collected {len(hosts)} in-scope hosts",
-            len(hosts),
+            f"Collected {len(domains)} in-scope domains",
+            len(domains),
             error=result.stderr.strip(),
         )
 
@@ -384,14 +395,14 @@ class ToolRunner:
         if not policy.is_domain:
             return ToolOutcome(0, "Assetfinder requires a domain", skipped=True)
         result = self.backend.run(
-            ["assetfinder", "--subs-only", policy.root_domain], process_timeout=240
+            ["assetfinder", "--subs-only", policy.root_domain], process_timeout=policy.domain_timeout
         )
         self._write_result(state, "assetfinder", result)
-        hosts = self._merge_hosts(policy, state, "assetfinder", _unique_lines(result.stdout))
+        domains = self._merge_domains(policy, state, "assetfinder", _unique_lines(result.stdout))
         return ToolOutcome(
             result.exit_code,
-            f"Collected {len(hosts)} in-scope hosts (merged with prior collect results)",
-            len(hosts),
+            f"Collected {len(domains)} in-scope domains (merged with prior collect results)",
+            len(domains),
             error=result.stderr.strip(),
         )
 
@@ -401,20 +412,20 @@ class ToolRunner:
             return ToolOutcome(0, "Amass enumeration requires a domain", skipped=True)
         result = self.backend.run(
             ["amass", "enum", "-passive", "-d", policy.root_domain],
-            process_timeout=1800,
+            process_timeout=policy.domain_timeout,
         )
         self._write_result(state, "amass_enum", result)
-        hosts = self._merge_hosts(policy, state, "amass_enum", _unique_lines(result.stdout))
+        domains = self._merge_domains(policy, state, "amass_enum", _unique_lines(result.stdout))
         return ToolOutcome(
             result.exit_code,
-            f"Collected {len(hosts)} in-scope hosts (merged with prior collect results)",
-            len(hosts),
+            f"Collected {len(domains)} in-scope domains (merged with prior collect results)",
+            len(domains),
             error=result.stderr.strip(),
         )
 
     def run_waybackurls(self, policy: ScopePolicy, state: dict[str, Any]) -> ToolOutcome:
         result = self.backend.run(
-            ["waybackurls"], input_text=policy.root_domain + "\n", process_timeout=300
+            ["waybackurls"], input_text=policy.root_domain + "\n", process_timeout=policy.domain_timeout
         )
         self._write_result(state, "waybackurls", result)
         urls: list[str] = []
@@ -425,9 +436,10 @@ class ToolRunner:
                 continue
             urls.append(url)
         urls = sorted(set(urls))
-        parsed = self.store.run_dir(state["run_id"]) / "parsed" / "wayback-urls.txt"
-        parsed.write_text("\n".join(urls) + ("\n" if urls else ""), encoding="utf-8", newline="\n")
-        self.store.add_artifact(state, parsed, "urls", "waybackurls")
+        with self.io_lock:
+            parsed = self.store.run_dir(state["run_id"]) / "collect" / "wayback-urls.txt"
+            parsed.write_text("\n".join(urls) + ("\n" if urls else ""), encoding="utf-8", newline="\n")
+            self.store.add_artifact(state, parsed, "urls", "waybackurls")
         return ToolOutcome(
             result.exit_code,
             f"Collected {len(urls)} in-scope historical URLs",
@@ -436,11 +448,12 @@ class ToolRunner:
         )
 
     def run_httpx(self, policy: ScopePolicy, state: dict[str, Any]) -> ToolOutcome:
-        hosts_path = self.store.run_dir(state["run_id"]) / "parsed" / "hosts.txt"
-        hosts = _unique_lines(hosts_path.read_text(encoding="utf-8")) if hosts_path.exists() else []
-        if policy.base_url not in hosts:
-            hosts.append(policy.base_url)
-        remote = self._copy_lines_input(state, "httpx-input.txt", hosts)
+        domains_path = self.store.run_dir(state["run_id"]) / "collect" / "domains.txt"
+        domains = _unique_lines(domains_path.read_text(encoding="utf-8")) if domains_path.exists() else []
+        probe_targets = list(domains)
+        if policy.base_url not in probe_targets:
+            probe_targets.append(policy.base_url)
+        remote = self._copy_lines_input(state, "probe", "httpx-input.txt", probe_targets)
         result = self.backend.run(
             [
                 "httpx", "-l", remote, "-silent", "-j", "-sc", "-title", "-td",
@@ -464,12 +477,12 @@ class ToolRunner:
             records.append(record)
             urls.append(url)
         run_dir = self.store.run_dir(state["run_id"])
-        alive = run_dir / "parsed" / "alive-urls.txt"
+        alive = run_dir / "probe" / "alive-urls.txt"
         alive.write_text("\n".join(sorted(set(urls))) + ("\n" if urls else ""), encoding="utf-8", newline="\n")
-        details = run_dir / "parsed" / "httpx.json"
+        details = run_dir / "probe" / "httpx.json"
         atomic_write_json(details, records)
         self.store.add_artifact(state, alive, "urls", "httpx")
-        self.store.add_artifact(state, details, "parsed", "httpx")
+        self.store.add_artifact(state, details, "result", "httpx")
         return ToolOutcome(
             result.exit_code,
             f"Confirmed {len(set(urls))} live in-scope URLs",
@@ -497,7 +510,7 @@ class ToolRunner:
                 skipped=True,
             )
 
-        remote = self._copy_lines_input(state, "robots-input.txt", targets)
+        remote = self._copy_lines_input(state, "probe", "robots-input.txt", targets)
         result = self.backend.run(
             [
                 "httpx", "-l", remote, "-silent", "-j", "-sc", "-ct", "-cl",
@@ -560,9 +573,9 @@ class ToolRunner:
                 }
             )
 
-        parsed = self.store.run_dir(state["run_id"]) / "parsed" / "robots.json"
+        parsed = self.store.run_dir(state["run_id"]) / "probe" / "robots.json"
         atomic_write_json(parsed, documents)
-        self.store.add_artifact(state, parsed, "parsed", "robots_txt")
+        self.store.add_artifact(state, parsed, "result", "robots_txt")
         summary = (
             f"Reviewed {len(documents)} robots.txt responses; recorded "
             f"{directive_count} directives and {comment_count} comments"
@@ -587,7 +600,7 @@ class ToolRunner:
         if not targets:
             return ToolOutcome(0, "Nuclei skipped because no in-scope URL exists", skipped=True)
 
-        remote = self._copy_lines_input(state, "nuclei-input.txt", targets)
+        remote = self._copy_lines_input(state, "probe", "nuclei-input.txt", targets)
         result = self.backend.run(
             [
                 "nuclei",
@@ -636,11 +649,11 @@ class ToolRunner:
                     "matcher_name": matcher_name,
                     "status_code": int(status_match.group(1)) if status_match else None,
                     "timestamp": str(record.get("timestamp") or ""),
-                    "evidence": f"raw/nuclei.jsonl:{line_number}",
+                    "evidence": f"probe/raw/nuclei.jsonl:{line_number}",
                 }
             )
 
-        parsed = self.store.run_dir(state["run_id"]) / "parsed" / "nuclei-findings.json"
+        parsed = self.store.run_dir(state["run_id"]) / "probe" / "nuclei-findings.json"
         atomic_write_json(parsed, findings)
         self.store.add_artifact(state, parsed, "findings", "nuclei")
         return ToolOutcome(
@@ -651,12 +664,12 @@ class ToolRunner:
         )
 
     def _live_urls(self, policy: ScopePolicy, state: dict[str, Any]) -> list[str]:
-        path = self.store.run_dir(state["run_id"]) / "parsed" / "alive-urls.txt"
+        path = self.store.run_dir(state["run_id"]) / "probe" / "alive-urls.txt"
         urls = _unique_lines(path.read_text(encoding="utf-8")) if path.exists() else []
         return urls or [policy.base_url]
 
     def run_katana(self, policy: ScopePolicy, state: dict[str, Any]) -> ToolOutcome:
-        remote = self._copy_lines_input(state, "katana-input.txt", self._live_urls(policy, state))
+        remote = self._copy_lines_input(state, "crawl", "katana-input.txt", self._live_urls(policy, state))
         depth = 2
         args = ["katana", "-list", remote, "-silent", "-d", str(depth), "-jc"]
         for pattern in _katana_scope_regexes(policy):
@@ -673,7 +686,7 @@ class ToolRunner:
             except PolicyError:
                 continue
             urls.append(url)
-        parsed = self.store.run_dir(state["run_id"]) / "parsed" / "katana-urls.txt"
+        parsed = self.store.run_dir(state["run_id"]) / "crawl" / "katana-urls.txt"
         parsed.write_text("\n".join(sorted(set(urls))) + ("\n" if urls else ""), encoding="utf-8", newline="\n")
         self.store.add_artifact(state, parsed, "urls", "katana")
         return ToolOutcome(
@@ -688,7 +701,7 @@ class ToolRunner:
     ) -> ToolOutcome:
         run_dir = self.store.run_dir(state["run_id"])
         urls = self._live_urls(policy, state)
-        katana_urls = run_dir / "parsed" / "katana-urls.txt"
+        katana_urls = run_dir / "crawl" / "katana-urls.txt"
         if katana_urls.exists():
             urls.extend(_unique_lines(katana_urls.read_text(encoding="utf-8")))
         candidates = _candidate_source_urls(policy, urls)
@@ -699,7 +712,7 @@ class ToolRunner:
                 skipped=True,
             )
 
-        remote = self._copy_lines_input(state, "source-comments-input.txt", candidates)
+        remote = self._copy_lines_input(state, "crawl", "source-comments-input.txt", candidates)
         result = self.backend.run(
             [
                 "httpx", "-l", remote, "-silent", "-j", "-sc", "-ct", "-cl",
@@ -758,12 +771,12 @@ class ToolRunner:
                     }
                 )
 
-        parsed = run_dir / "parsed" / "source-comments.json"
+        parsed = run_dir / "crawl" / "source-comments.json"
         atomic_write_json(parsed, findings)
-        self.store.add_artifact(state, parsed, "parsed", "source_comments")
-        endpoint_path = run_dir / "parsed" / "source-endpoints.json"
+        self.store.add_artifact(state, parsed, "result", "source_comments")
+        endpoint_path = run_dir / "crawl" / "source-endpoints.json"
         atomic_write_json(endpoint_path, endpoints)
-        self.store.add_artifact(state, endpoint_path, "parsed", "source_comments")
+        self.store.add_artifact(state, endpoint_path, "result", "source_comments")
         return ToolOutcome(
             result.exit_code,
             f"Reviewed {reviewed} source responses; recorded {len(findings)} comments and {len(endpoints)} endpoint/action candidates",
@@ -795,9 +808,9 @@ class ToolRunner:
             match = pattern.search(line.strip())
             if match:
                 records.append({"path": match.group(1), "status": int(match.group(2)), "size": int(match.group(3)) if match.group(3) else None})
-        parsed = self.store.run_dir(state["run_id"]) / "parsed" / "gobuster-dir.json"
+        parsed = self.store.run_dir(state["run_id"]) / "discovery" / "gobuster-dir.json"
         atomic_write_json(parsed, records)
-        self.store.add_artifact(state, parsed, "parsed", "gobuster_dir")
+        self.store.add_artifact(state, parsed, "result", "gobuster_dir")
         return ToolOutcome(
             result.exit_code,
             f"Found {len(records)} content paths",
@@ -815,9 +828,9 @@ class ToolRunner:
         )
         self._write_result(state, "parameth", result)
         findings = [line.strip() for line in result.stdout.splitlines() if line.strip().startswith("[") or "parameter" in line.lower()]
-        parsed = self.store.run_dir(state["run_id"]) / "parsed" / "parameth.json"
+        parsed = self.store.run_dir(state["run_id"]) / "discovery" / "parameth.json"
         atomic_write_json(parsed, {"target": target, "interesting_lines": findings})
-        self.store.add_artifact(state, parsed, "parsed", "parameth")
+        self.store.add_artifact(state, parsed, "result", "parameth")
         return ToolOutcome(
             result.exit_code,
             f"Recorded {len(findings)} parameter result lines",

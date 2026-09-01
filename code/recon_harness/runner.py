@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from .deep_discovery import DeepDiscoveryToolRunner
@@ -16,6 +18,14 @@ from .tools import run_local_dorkgen
 class HarnessRunner:
     def __init__(self, store: RunStore) -> None:
         self.store = store
+        self._io_lock = threading.RLock()
+
+    def _run_remote_tool(self, tool: str, policy: ScopePolicy, state: dict[str, Any]):
+        return DeepDiscoveryToolRunner(
+            self._backend_for_tool(policy, state["run_id"], tool),
+            self.store,
+            self._io_lock,
+        ).run(tool, policy, state)
 
     def policy_for_run(self, state: dict[str, Any]) -> ScopePolicy:
         return ScopePolicy.load(self.store.run_dir(state["run_id"]) / "scope.toml")
@@ -74,16 +84,33 @@ class HarnessRunner:
         self.store.save(state)
         failures = 0
         try:
-            for tool in tools_for_stage(normalized):
-                if stage_state["tools"].get(tool, {}).get("status") == "completed":
-                    continue
-                outcome = (
-                    self._run_local_tool(tool, policy, state)
-                    if tool in LOCAL_TOOLS
-                    else DeepDiscoveryToolRunner(
-                        self._backend_for_tool(policy, run_id, tool), self.store
-                    ).run(tool, policy, state)
+            pending_tools = [
+                tool for tool in tools_for_stage(normalized)
+                if stage_state["tools"].get(tool, {}).get("status") != "completed"
+            ]
+            outcomes = []
+            if normalized == "collect" and "dorkgen" in pending_tools:
+                outcomes.append(("dorkgen", self._run_local_tool("dorkgen", policy, state)))
+                pending_tools.remove("dorkgen")
+            if normalized == "collect" and pending_tools:
+                with ThreadPoolExecutor(max_workers=len(pending_tools)) as executor:
+                    futures = {
+                        executor.submit(self._run_remote_tool, tool, policy, state): tool
+                        for tool in pending_tools
+                    }
+                    outcomes.extend((futures[future], future.result()) for future in as_completed(futures))
+            else:
+                outcomes.extend(
+                    (
+                        tool,
+                        self._run_local_tool(tool, policy, state)
+                        if tool in LOCAL_TOOLS
+                        else self._run_remote_tool(tool, policy, state),
+                    )
+                    for tool in pending_tools
                 )
+
+            for tool, outcome in outcomes:
                 tool_status = "skipped" if outcome.skipped else (
                     "completed" if outcome.exit_code == 0 else "failed"
                 )
@@ -147,7 +174,7 @@ class HarnessRunner:
             outcome = (
                 self._run_local_tool(tool, policy, state)
                 if tool in LOCAL_TOOLS
-                else DeepDiscoveryToolRunner(backend, self.store).run(tool, policy, state)
+                else DeepDiscoveryToolRunner(backend, self.store, self._io_lock).run(tool, policy, state)
             )
         except (Exception, KeyboardInterrupt) as exc:
             stage_state.update({"status": "failed", "finished_at": utc_now(), "error": str(exc)})

@@ -14,6 +14,9 @@ from .docker_backend import DEFAULT_IMAGE
 from .models import validate_stage
 
 
+DEFAULT_DOMAIN_TIMEOUT = 180
+
+
 class PolicyError(ValueError):
     """스코프 밖의 대상을 요청했을 때 발생한다."""
 
@@ -30,6 +33,7 @@ class ScopePolicy:
     base_url: str
     docker_network: str | None = None
     worker_image: str = DEFAULT_IMAGE
+    domain_timeout: int = DEFAULT_DOMAIN_TIMEOUT
     domains: list[str] = field(init=False)
     allowed_ports: list[int] = field(init=False)
     is_ip: bool = field(init=False)
@@ -43,6 +47,12 @@ class ScopePolicy:
         except ValueError:
             self.is_ip = False
         self.is_domain = not self.is_ip
+        try:
+            self.domain_timeout = int(self.domain_timeout)
+        except (TypeError, ValueError) as exc:
+            raise PolicyError(f"Invalid domain timeout: {self.domain_timeout}") from exc
+        if not 1 <= self.domain_timeout <= 180:
+            raise PolicyError("Domain timeout must be between 1 and 180 seconds")
         parsed = urlsplit(self.base_url)
         if parsed.port is not None:
             self.allowed_ports = [parsed.port]
@@ -74,6 +84,7 @@ class ScopePolicy:
             domain=domain,
             base_url=base_url,
             docker_network=network,
+            domain_timeout=scope.get("domain_timeout", DEFAULT_DOMAIN_TIMEOUT),
         )
         policy.validate_url(base_url)
         return policy
@@ -114,6 +125,7 @@ class ScopePolicy:
             "domains": self.domains,
             "allowed_ports": self.allowed_ports,
             "target_type": "ip" if self.is_ip else "domain",
+            "domain_timeout": self.domain_timeout,
             "worker_image": self.worker_image,
             "docker_network": self.docker_network,
         }

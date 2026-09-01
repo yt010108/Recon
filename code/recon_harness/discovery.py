@@ -53,11 +53,11 @@ def _origin(url: str) -> str:
 
 
 def _source_candidates(run_dir: Path) -> Iterator[tuple[str, str]]:
-    for item in _json(run_dir / "parsed" / "source-endpoints.json", []):
+    for item in _json(run_dir / "crawl" / "source-endpoints.json", []):
         if isinstance(item, dict) and item.get("endpoint"):
             yield "source", str(item["endpoint"])
 
-    for document in _json(run_dir / "parsed" / "robots.json", []):
+    for document in _json(run_dir / "probe" / "robots.json", []):
         if not isinstance(document, dict):
             continue
         robots_url = str(document.get("url") or "")
@@ -73,8 +73,8 @@ def _source_candidates(run_dir: Path) -> Iterator[tuple[str, str]]:
             ):
                 yield "robots", urljoin(robots_url, value)
 
-    for source, name in (("katana", "katana-urls.txt"), ("wayback", "wayback-urls.txt")):
-        for value in _lines(run_dir / "parsed" / name):
+    for source, path in (("katana", run_dir / "crawl" / "katana-urls.txt"), ("wayback", run_dir / "collect" / "wayback-urls.txt")):
+        for value in _lines(path):
             yield source, value
 
 
@@ -85,7 +85,7 @@ class DiscoveryRunner:
 
     def _load_queue(self, run_dir: Path) -> dict[str, dict[str, Any]]:
         frontier: dict[str, dict[str, Any]] = {}
-        for line in _lines(run_dir / "parsed" / "url-queue.jsonl"):
+        for line in _lines(run_dir / "discovery" / "url-queue.jsonl"):
             try:
                 item = json.loads(line)
             except json.JSONDecodeError:
@@ -140,18 +140,19 @@ class DiscoveryRunner:
     ) -> tuple[set[str], set[str], set[str]]:
         probed: set[str] = set()
         live: set[str] = set()
-        for item in _json(run_dir / "parsed" / "httpx.json", []):
+        for item in _json(run_dir / "probe" / "httpx.json", []):
             if isinstance(item, dict):
                 for key in ("input", "url", "final_url"):
                     value = item.get(key)
                     if isinstance(value, str) and (url := _canonical_url(policy, value)):
                         probed.add(url)
-        for value in _lines(run_dir / "parsed" / "alive-urls.txt"):
+        for value in _lines(run_dir / "probe" / "alive-urls.txt"):
             if url := _canonical_url(policy, value):
                 probed.add(url)
                 live.add(url)
         for name in ("robots_txt.jsonl", "source_comments.jsonl", "source_assets.jsonl"):
-            path = run_dir / "raw" / name
+            stage = "probe" if name == "robots_txt.jsonl" else "crawl"
+            path = run_dir / stage / "raw" / name
             if not path.exists():
                 continue
             for item in _httpx_records(path.read_text(encoding="utf-8")):
@@ -161,7 +162,7 @@ class DiscoveryRunner:
                         probed.add(url)
         crawled = {
             url
-            for value in _lines(run_dir / "raw" / "katana-input.txt")
+            for value in _lines(run_dir / "crawl" / "raw" / "katana-input.txt")
             if (url := _canonical_url(policy, value))
         }
         return probed, live, crawled
@@ -190,12 +191,12 @@ class DiscoveryRunner:
         self, state: dict[str, Any], targets: list[str], round_number: int
     ) -> tuple[Any, list[dict[str, Any]]]:
         name = f"discovery-httpx-r{round_number}"
-        remote = self.adapter._copy_lines_input(state, f"{name}-input.txt", targets)
+        remote = self.adapter._copy_lines_input(state, "discovery", f"{name}-input.txt", targets)
         result = self.adapter.backend.run(
             ["httpx", "-l", remote, "-silent", "-j", "-sc", "-ct", "-cl", "-duc"],
             process_timeout=900,
         )
-        self.adapter._write_result(state, name, result, extension="jsonl")
+        self.adapter._write_result(state, name, result, extension="jsonl", stage="discovery")
         return result, _httpx_records(result.stdout)
 
     def _seeds(
@@ -234,7 +235,7 @@ class DiscoveryRunner:
         round_number: int,
     ) -> tuple[Any, list[str]]:
         name = f"discovery-katana-r{round_number}"
-        remote = self.adapter._copy_lines_input(state, f"{name}-input.txt", seeds)
+        remote = self.adapter._copy_lines_input(state, "discovery", f"{name}-input.txt", seeds)
         args = [
             "katana", "-list", remote, "-silent", "-d", "1", "-jc",
             "-c", "1", "-rl", "5",
@@ -242,7 +243,7 @@ class DiscoveryRunner:
         for pattern in _katana_scope_regexes(policy):
             args.extend(["-cs", pattern])
         result = self.adapter.backend.run(args, process_timeout=900)
-        self.adapter._write_result(state, name, result)
+        self.adapter._write_result(state, name, result, stage="discovery")
         return result, _unique_lines(result.stdout)
 
     def _write_queue(
@@ -251,7 +252,7 @@ class DiscoveryRunner:
         frontier: dict[str, dict[str, Any]],
         crawled: set[str],
     ) -> None:
-        path = self.store.run_dir(state["run_id"]) / "parsed" / "url-queue.jsonl"
+        path = self.store.run_dir(state["run_id"]) / "discovery" / "url-queue.jsonl"
         lines = []
         for url in sorted(frontier):
             entry = frontier[url]

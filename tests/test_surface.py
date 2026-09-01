@@ -22,7 +22,7 @@ class SurfaceTests(unittest.TestCase):
             run_dir = store.run_dir(state["run_id"])
             urls = [f"https://example.com/api/type{index}?id={value}" for index in range(30) for value in range(2)]
             urls.append("https://example.com/static/app.js")
-            (run_dir / "parsed" / "katana-urls.txt").write_text("\n".join(urls), encoding="utf-8")
+            (run_dir / "crawl" / "katana-urls.txt").write_text("\n".join(urls), encoding="utf-8")
             result = build_surface(policy, state, store)
         self.assertEqual(len(result["routes"]), 30)
         self.assertEqual(len(result["candidates"]), 20)

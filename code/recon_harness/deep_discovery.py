@@ -423,7 +423,7 @@ class DeepDiscoveryToolRunner(ToolRunner):
         return DiscoveryRunner(self, self.store).run(policy, state)
 
     def run_katana(self, policy: ScopePolicy, state: dict[str, Any]) -> ToolOutcome:
-        remote = self._copy_lines_input(state, "katana-input.txt", self._live_urls(policy, state))
+        remote = self._copy_lines_input(state, "crawl", "katana-input.txt", self._live_urls(policy, state))
         args = [
             "katana", "-list", remote, "-silent", "-d", str(KATANA_DEPTH),
             "-jc",
@@ -439,7 +439,7 @@ class DeepDiscoveryToolRunner(ToolRunner):
             except PolicyError:
                 continue
             urls.append(url)
-        parsed = self.store.run_dir(state["run_id"]) / "parsed" / "katana-urls.txt"
+        parsed = self.store.run_dir(state["run_id"]) / "crawl" / "katana-urls.txt"
         parsed.write_text(
             "\n".join(sorted(set(urls))) + ("\n" if urls else ""),
             encoding="utf-8",
@@ -460,7 +460,7 @@ class DeepDiscoveryToolRunner(ToolRunner):
         urls: list[str],
         tool_name: str,
     ) -> tuple[Any, list[dict[str, Any]]]:
-        remote = self._copy_lines_input(state, f"{tool_name}-input.txt", urls)
+        remote = self._copy_lines_input(state, "crawl", f"{tool_name}-input.txt", urls)
         result = self.backend.run(
             [
                 "httpx", "-l", remote, "-silent", "-j", "-sc", "-ct", "-cl",
@@ -468,12 +468,14 @@ class DeepDiscoveryToolRunner(ToolRunner):
             ],
             process_timeout=900,
         )
-        return result, self._write_sanitized_httpx_result(state, tool_name, result)
+        return result, self._write_sanitized_httpx_result(
+            state, tool_name, result, stage="crawl"
+        )
 
     def run_source_comments(self, policy: ScopePolicy, state: dict[str, Any]) -> ToolOutcome:
         run_dir = self.store.run_dir(state["run_id"])
         urls = self._live_urls(policy, state)
-        katana_urls = run_dir / "parsed" / "katana-urls.txt"
+        katana_urls = run_dir / "crawl" / "katana-urls.txt"
         if katana_urls.exists():
             urls.extend(_unique_lines(katana_urls.read_text(encoding="utf-8")))
         candidates = _candidate_source_urls(policy, urls)
@@ -604,12 +606,12 @@ class DeepDiscoveryToolRunner(ToolRunner):
             for record in secondary_records:
                 process_record(record, allow_discovery=False)
 
-        atomic_write_json(run_dir / "parsed" / "source-comments.json", comments)
-        self.store.add_artifact(state, run_dir / "parsed" / "source-comments.json", "parsed", "source_comments")
-        atomic_write_json(run_dir / "parsed" / "source-endpoints.json", endpoints)
-        self.store.add_artifact(state, run_dir / "parsed" / "source-endpoints.json", "parsed", "source_comments")
-        atomic_write_json(run_dir / "parsed" / "source-assets.json", assets)
-        self.store.add_artifact(state, run_dir / "parsed" / "source-assets.json", "parsed", "source_comments")
+        atomic_write_json(run_dir / "crawl" / "source-comments.json", comments)
+        self.store.add_artifact(state, run_dir / "crawl" / "source-comments.json", "result", "source_comments")
+        atomic_write_json(run_dir / "crawl" / "source-endpoints.json", endpoints)
+        self.store.add_artifact(state, run_dir / "crawl" / "source-endpoints.json", "result", "source_comments")
+        atomic_write_json(run_dir / "crawl" / "source-assets.json", assets)
+        self.store.add_artifact(state, run_dir / "crawl" / "source-assets.json", "result", "source_comments")
 
         exit_code = initial_result.exit_code
         errors = [initial_result.stderr.strip()] if initial_result.stderr.strip() else []

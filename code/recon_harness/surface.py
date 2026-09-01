@@ -72,30 +72,30 @@ def _labels(values: list[str], mapping: dict[str, set[str]]) -> list[str]:
 
 def build_surface(policy: ScopePolicy, state: dict[str, Any], store: RunStore) -> dict[str, Any]:
     run_dir = store.run_dir(state["run_id"])
-    parsed = run_dir / "parsed"
-    normalized = run_dir / "normalized"
+    normalized = run_dir / "normalize"
     normalized.mkdir(exist_ok=True)
     observations: list[tuple[str, str, dict[str, Any]]] = []
 
-    for name, tool in (
-        ("wayback-urls.txt", "waybackurls"),
-        ("alive-urls.txt", "httpx"),
-        ("katana-urls.txt", "katana"),
+    for path, tool in (
+        (run_dir / "collect" / "wayback-urls.txt", "waybackurls"),
+        (run_dir / "probe" / "alive-urls.txt", "httpx"),
+        (run_dir / "crawl" / "katana-urls.txt", "katana"),
     ):
-        observations.extend((url, "GET", {"tool": tool, "artifact": f"parsed/{name}"}) for url in _lines(parsed / name))
-    for line in _lines(parsed / "url-queue.jsonl"):
+        artifact = path.relative_to(run_dir).as_posix()
+        observations.extend((url, "GET", {"tool": tool, "artifact": artifact}) for url in _lines(path))
+    for line in _lines(run_dir / "discovery" / "url-queue.jsonl"):
         try:
             item = json.loads(line)
         except json.JSONDecodeError:
             continue
         if isinstance(item, dict) and item.get("url"):
-            observations.append((str(item["url"]), "GET", {"tool": "url_discovery", "artifact": "parsed/url-queue.jsonl"}))
-    for item in _json(parsed / "gobuster-dir.json", []):
+            observations.append((str(item["url"]), "GET", {"tool": "url_discovery", "artifact": "discovery/url-queue.jsonl"}))
+    for item in _json(run_dir / "discovery" / "gobuster-dir.json", []):
         if isinstance(item, dict) and item.get("path"):
-            observations.append((urljoin(policy.base_url.rstrip("/") + "/", str(item["path"]).lstrip("/")), "GET", {"tool": "gobuster_dir", "artifact": "parsed/gobuster-dir.json"}))
-    for item in _json(parsed / "source-endpoints.json", []):
+            observations.append((urljoin(policy.base_url.rstrip("/") + "/", str(item["path"]).lstrip("/")), "GET", {"tool": "gobuster_dir", "artifact": "discovery/gobuster-dir.json"}))
+    for item in _json(run_dir / "crawl" / "source-endpoints.json", []):
         if isinstance(item, dict) and item.get("endpoint"):
-            observations.append((str(item["endpoint"]), str(item.get("method") or "GET").upper(), {"tool": "source_comments", "artifact": "parsed/source-endpoints.json", "source": item.get("source"), "line": item.get("line")}))
+            observations.append((str(item["endpoint"]), str(item.get("method") or "GET").upper(), {"tool": "source_comments", "artifact": "crawl/source-endpoints.json", "source": item.get("source"), "line": item.get("line")}))
 
     routes: dict[str, dict[str, Any]] = {}
     for url, method, evidence in observations:

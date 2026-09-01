@@ -26,6 +26,7 @@ class FakeBackend:
     def __init__(self, *results: CommandResult) -> None:
         self.results = list(results)
         self.commands: list[list[str]] = []
+        self.options: list[dict[str, object]] = []
 
     def prepare_remote_dir(self, _run_id: str) -> str:
         return "/work/run/.worker-inputs"
@@ -33,8 +34,9 @@ class FakeBackend:
     def copy_to(self, _local: Path, _remote: str) -> None:
         return None
 
-    def run(self, command: list[str], **_kwargs: object) -> CommandResult:
+    def run(self, command: list[str], **kwargs: object) -> CommandResult:
         self.commands.append(command)
+        self.options.append(kwargs)
         return self.results.pop(0)
 
 
@@ -131,19 +133,19 @@ class AdapterTests(unittest.TestCase):
             self.policy, self.state
         )
         run_dir = self.store.run_dir(self.state["run_id"])
-        parsed = json.loads((run_dir / "parsed" / "robots.json").read_text(encoding="utf-8"))
+        parsed = json.loads((run_dir / "probe" / "robots.json").read_text(encoding="utf-8"))
         self.assertEqual(parsed[0]["body"], body)
         self.assertEqual(parsed[0]["comments"][0]["text"], " token=sample-original-value")
         self.assertNotIn(
             "sample-original-value",
-            (run_dir / "raw" / "robots_txt.jsonl").read_text(encoding="utf-8"),
+            (run_dir / "probe" / "raw" / "robots_txt.jsonl").read_text(encoding="utf-8"),
         )
         self.assertNotIn("-fr", backend.commands[0])
 
     def test_dorkgen_writes_queries_without_backend_calls(self) -> None:
         backend = FakeBackend()
         outcome = ToolRunner(backend, self.store).run_dorkgen(self.policy, self.state)
-        path = self.store.run_dir(self.state["run_id"]) / "parsed" / "google-dorks.txt"
+        path = self.store.run_dir(self.state["run_id"]) / "collect" / "google-dorks.txt"
         lines = path.read_text(encoding="utf-8").splitlines()
         self.assertGreater(len(lines), 50)
         self.assertEqual(lines[0], "site:recon-juice-shop")
@@ -152,10 +154,10 @@ class AdapterTests(unittest.TestCase):
 
     def test_source_adapter_keeps_exact_multiline_comment(self) -> None:
         run_dir = self.store.run_dir(self.state["run_id"])
-        (run_dir / "parsed" / "alive-urls.txt").write_text(
+        (run_dir / "probe" / "alive-urls.txt").write_text(
             "http://recon-juice-shop:3000/\n", encoding="utf-8"
         )
-        (run_dir / "parsed" / "katana-urls.txt").write_text(
+        (run_dir / "crawl" / "katana-urls.txt").write_text(
             "http://recon-juice-shop:3000/app.js\n", encoding="utf-8"
         )
         source = "fetch('/api/orders?id=1');\nconst action_id = 'abc123';\n/* secret=VISIBLE\nsecond line */"
@@ -170,17 +172,17 @@ class AdapterTests(unittest.TestCase):
             self.policy, self.state
         )
         parsed = json.loads(
-            (run_dir / "parsed" / "source-comments.json").read_text(encoding="utf-8")
+            (run_dir / "crawl" / "source-comments.json").read_text(encoding="utf-8")
         )
         self.assertEqual(parsed[0]["text"], " secret=VISIBLE\nsecond line ")
         endpoints = json.loads(
-            (run_dir / "parsed" / "source-endpoints.json").read_text(encoding="utf-8")
+            (run_dir / "crawl" / "source-endpoints.json").read_text(encoding="utf-8")
         )
         self.assertTrue(any(item.get("endpoint", "").endswith("/api/orders?id=1") for item in endpoints))
         self.assertTrue(any(item["kind"] == "action-id" and item["value"] == "abc123" for item in endpoints))
         self.assertNotIn(
             "VISIBLE",
-            (run_dir / "raw" / "source_comments.jsonl").read_text(encoding="utf-8"),
+            (run_dir / "crawl" / "raw" / "source_comments.jsonl").read_text(encoding="utf-8"),
         )
         self.assertNotIn("-fr", backend.commands[0])
 
@@ -199,14 +201,14 @@ class AdapterTests(unittest.TestCase):
         outcome = ToolRunner(backend, self.store).run_assetfinder(
             policy, state
         )
-        hosts_path = self.store.run_dir(state["run_id"]) / "parsed" / "hosts.txt"
+        domains_path = self.store.run_dir(state["run_id"]) / "collect" / "domains.txt"
         self.assertEqual(
-            hosts_path.read_text(encoding="utf-8").splitlines(),
+            domains_path.read_text(encoding="utf-8").splitlines(),
             ["a.example.com", "b.example.com", "example.com", "status.example.com"],
         )
         self.assertEqual(outcome.item_count, 4)
 
-    def test_subfinder_and_assetfinder_merge_into_one_hosts_file(self) -> None:
+    def test_subfinder_and_assetfinder_merge_into_one_domains_file(self) -> None:
         policy = ScopePolicy.load(EXAMPLE_SCOPE)
         state = self.store.create(policy.path, policy.snapshot())
         subfinder_out = CommandResult(0, "c.example.com\n", "")
@@ -215,13 +217,13 @@ class AdapterTests(unittest.TestCase):
         runner.run_subfinder(policy, state)
         runner.backend = FakeBackend(assetfinder_out)
         runner.run_assetfinder(policy, state)
-        hosts_path = self.store.run_dir(state["run_id"]) / "parsed" / "hosts.txt"
+        domains_path = self.store.run_dir(state["run_id"]) / "collect" / "domains.txt"
         self.assertEqual(
-            hosts_path.read_text(encoding="utf-8").splitlines(),
+            domains_path.read_text(encoding="utf-8").splitlines(),
             ["c.example.com", "d.example.com", "example.com"],
         )
 
-    def test_amass_enum_is_passive_only_and_merges_hosts(self) -> None:
+    def test_amass_enum_is_passive_only_and_merges_domains(self) -> None:
         policy = ScopePolicy.load(EXAMPLE_SCOPE)
         state = self.store.create(policy.path, policy.snapshot())
         stdout = "e.example.com\n*.example.com\nfake-example.org\ne.example.com\n"
@@ -233,16 +235,36 @@ class AdapterTests(unittest.TestCase):
             backend.commands[0],
             ["amass", "enum", "-passive", "-d", "example.com"],
         )
-        hosts_path = self.store.run_dir(state["run_id"]) / "parsed" / "hosts.txt"
+        domains_path = self.store.run_dir(state["run_id"]) / "collect" / "domains.txt"
         self.assertEqual(
-            hosts_path.read_text(encoding="utf-8").splitlines(),
+            domains_path.read_text(encoding="utf-8").splitlines(),
             ["e.example.com", "example.com"],
         )
         self.assertEqual(outcome.item_count, 2)
 
+    def test_domain_collectors_share_one_timeout(self) -> None:
+        policy = ScopePolicy.load(EXAMPLE_SCOPE)
+        policy.domain_timeout = 45
+        state = self.store.create(policy.path, policy.snapshot())
+        backend = FakeBackend(
+            CommandResult(0, "", ""),
+            CommandResult(0, "", ""),
+            CommandResult(0, "", ""),
+            CommandResult(0, "", ""),
+        )
+        runner = ToolRunner(backend, self.store)
+        runner.run_subfinder(policy, state)
+        runner.run_assetfinder(policy, state)
+        runner.run_amass_enum(policy, state)
+        runner.run_waybackurls(policy, state)
+        self.assertEqual(
+            [options["process_timeout"] for options in backend.options],
+            [45, 45, 45, 45],
+        )
+
     def test_nuclei_uses_plain_command_and_keeps_jsonl_findings(self) -> None:
         run_dir = self.store.run_dir(self.state["run_id"])
-        (run_dir / "parsed" / "alive-urls.txt").write_text(
+        (run_dir / "probe" / "alive-urls.txt").write_text(
             "http://recon-juice-shop:3000/\nhttp://outside.test/\n",
             encoding="utf-8",
         )
@@ -276,11 +298,11 @@ class AdapterTests(unittest.TestCase):
         ):
             self.assertNotIn(option, command)
         findings = json.loads(
-            (run_dir / "parsed" / "nuclei-findings.json").read_text(encoding="utf-8")
+            (run_dir / "probe" / "nuclei-findings.json").read_text(encoding="utf-8")
         )
         self.assertEqual(len(findings), 3)
         self.assertEqual(findings[0]["status_code"], 200)
-        self.assertEqual(findings[0]["evidence"], "raw/nuclei.jsonl:1")
+        self.assertEqual(findings[0]["evidence"], "probe/raw/nuclei.jsonl:1")
         self.assertEqual(findings[1]["matched_at"], "http://outside.test/")
         self.assertIsNone(findings[2]["status_code"])
         self.assertEqual(outcome.item_count, 3)

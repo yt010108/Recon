@@ -30,7 +30,7 @@
 
 Collect에서 Subfinder, Assetfinder, Amass, Waybackurls는 동시에 시작한다. 도구별 설정은 두지 않고 병렬 도메인 탐색 구간 전체에 하나의 `domain_timeout` 값만 사용하며 최대 180초다. Subfinder·Assetfinder·Amass 결과는 스코프 검사 후 정렬·중복 제거하여 `collect/domains.txt`에 합친다. 병렬 쓰기는 하나의 잠금으로만 보호한다.
 
-URL Discovery는 Discovery의 기본 작업이고 Gobuster는 선택 도구다. Parameth는 자동 단계에서 제외한다. Discovery가 `parameth-targets.txt`를 만들고 사용자가 URL을 선택했을 때만 해당 URL에 실행한다. URL Discovery·Gobuster·선택 실행한 Parameth 결과는 즉시 `discovery/report.md`의 하나의 경로 트리로 합친다.
+URL Discovery는 Discovery의 기본 작업이고 Gobuster는 선택 도구다. Parameth는 자동 단계에서 제외한다. Discovery가 `parameth-targets.txt`를 만들고 사용자가 URL을 선택했을 때만 해당 URL에 실행한다. URL Discovery·Gobuster·선택 실행한 Parameth 결과는 즉시 `discovery/report.md`의 하나의 경로 트리로 합치고, Parameth 파라미터는 Normalize와 최종 `report.md`에도 전달한다.
 
 ## 결과 구조
 

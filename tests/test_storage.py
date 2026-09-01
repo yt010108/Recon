@@ -113,6 +113,17 @@ class RunStoreTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            (run_dir / "discovery" / "parameth.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "target": "http://recon-juice-shop:3000/search",
+                            "interesting_lines": ["[+] parameter found: token"],
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
             report = build_report(store, state)
             self.assertTrue(report.is_file())
             loaded = store.load(state["run_id"])
@@ -120,6 +131,7 @@ class RunStoreTests(unittest.TestCase):
             text = report.read_text(encoding="utf-8")
             self.assertIn("http://recon-juice-shop:3000", text)
             self.assertIn("/admin [GET P2 params=debug]", text)
+            self.assertIn("/search [GET P3 params=token]", text)
             self.assertIn("## 중요 사이트맵", text)
             self.assertIn("/admin [GET P2 params=debug]", text)
             sitemap = text.split("## 중요 사이트맵", 1)[1].split("## 중요 소스 정보", 1)[0]

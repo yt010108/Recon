@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,10 +24,24 @@ class SurfaceTests(unittest.TestCase):
             urls = [f"https://example.com/api/type{index}?id={value}" for index in range(30) for value in range(2)]
             urls.append("https://example.com/static/app.js")
             (run_dir / "crawl" / "katana-urls.txt").write_text("\n".join(urls), encoding="utf-8")
+            (run_dir / "discovery" / "parameth.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "target": "https://example.com/search",
+                            "interesting_lines": ["[+] parameter found: debug"],
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
             result = build_surface(policy, state, store)
-        self.assertEqual(len(result["routes"]), 30)
+        self.assertEqual(len(result["routes"]), 31)
         self.assertEqual(len(result["candidates"]), 20)
         self.assertFalse(any(item["path"].endswith(".js") for item in result["routes"]))
+        parameth_route = next(item for item in result["routes"] if item["path"] == "/search")
+        self.assertEqual(parameth_route["query_parameters"], ["debug"])
+        self.assertEqual(parameth_route["evidence"][0]["tool"], "parameth")
 
 
 if __name__ == "__main__":

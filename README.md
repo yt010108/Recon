@@ -69,7 +69,8 @@ Wayback·robots.txt·Katana·source 결과는 출처를 보존한 `discovery/url
 각 단계가 끝나면 `<단계>/report.md`를 갱신한다. `discovery/report.md`는 URL Discovery와
 실행된 Gobuster·Parameth 결과를 하나의 경로 트리로 합친다. Gobuster는 선택 실행한다.
 Parameth는 자동 실행하지 않고 `discovery/parameth-targets.txt`에서 사용자가 URL을
-선택했을 때만 해당 URL에 실행한다.
+선택했을 때만 해당 URL에 실행한다. 발견 파라미터는 `normalize/routes.jsonl`과
+최종 `report.md` 사이트맵의 해당 경로에도 반영한다.
 루트 `report.md`는 Normalize 완료 후 만드는 최종 보고서다.
 
 `report.md`는 중요 route 최대 50개를 Method·파라미터·중요도만 포함한 사이트맵으로

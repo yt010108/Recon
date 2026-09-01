@@ -48,6 +48,29 @@ def _lines(path: Path) -> list[str]:
         return []
 
 
+def _parameth_urls(path: Path) -> list[str]:
+    urls = []
+    records = _json(path, [])
+    for record in records if isinstance(records, list) else []:
+        if not isinstance(record, dict) or not record.get("target"):
+            continue
+        names = []
+        for line in record.get("interesting_lines") or []:
+            names.extend(
+                re.findall(
+                    r"(?i)(?:parameter|param)(?:\s+found)?\s*[:=]\s*([a-zA-Z0-9_.-]+)",
+                    str(line),
+                )
+            )
+        if not names:
+            continue
+        target = urlsplit(str(record["target"]))
+        existing = {name for name, _value in parse_qsl(target.query, keep_blank_values=True)}
+        query = "&".join(f"{name}=" for name in sorted(existing | set(names)))
+        urls.append(urlunsplit((target.scheme, target.netloc, target.path or "/", query, "")))
+    return urls
+
+
 def _normalized_path(path: str) -> str:
     parts = []
     for part in (path or "/").split("/"):
@@ -96,6 +119,14 @@ def build_surface(policy: ScopePolicy, state: dict[str, Any], store: RunStore) -
     for item in _json(run_dir / "crawl" / "source-endpoints.json", []):
         if isinstance(item, dict) and item.get("endpoint"):
             observations.append((str(item["endpoint"]), str(item.get("method") or "GET").upper(), {"tool": "source_comments", "artifact": "crawl/source-endpoints.json", "source": item.get("source"), "line": item.get("line")}))
+    observations.extend(
+        (
+            url,
+            "GET",
+            {"tool": "parameth", "artifact": "discovery/parameth.json"},
+        )
+        for url in _parameth_urls(run_dir / "discovery" / "parameth.json")
+    )
 
     routes: dict[str, dict[str, Any]] = {}
     for url, method, evidence in observations:

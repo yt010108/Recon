@@ -346,9 +346,20 @@ def build_report(store: RunStore, state: dict[str, Any]) -> Path:
         f"- 기능 단위 route: `{len(surface['routes'])}`",
         f"- 사이트맵 중요 route: `{len(important_routes)}` / 최대 50",
         f"- Nuclei 후보: `{len(nuclei)}`", f"- 실패 도구: `{len(failures)}`", "",
-        "## 중요 사이트맵", "",
-        "표시 정보: HTTP Method, 중요도, 파라미터", "", "```text",
+        "## Burp Review Queue", "",
+        "| 우선순위 | Method | Route | 확인 | 상태 |", "|---|---|---|---|---|",
     ]
+    for item in surface["candidates"]:
+        lines.append(
+            f"| {_cell(item.get('priority'))} | {_cell(item.get('method'))} | {_cell(item.get('route'))} | "
+            f"{_cell(', '.join(item.get('test_hints') or []))} | {_cell(item.get('status'))} |"
+        )
+    if not surface["candidates"]:
+        lines.append("| - | - | 검토 후보 없음 | - | - |")
+    lines.extend([
+        "", "## 중요 사이트맵", "",
+        "표시 정보: HTTP Method, 중요도, 파라미터", "", "```text",
+    ])
     lines.extend(_sitemap_lines(important_routes) or ["중요 route 없음"])
     lines.append("```")
     lines.extend([

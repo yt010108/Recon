@@ -93,6 +93,23 @@ def _labels(values: list[str], mapping: dict[str, set[str]]) -> list[str]:
     return [label for label, words in mapping.items() if tokens & words]
 
 
+def _test_hints(roles: list[str], sinks: list[str]) -> list[str]:
+    hints = []
+    if "object" in sinks:
+        hints.extend(("IDOR", "AuthZ"))
+    if "admin" in roles:
+        hints.append("AuthZ")
+    if "auth" in roles:
+        hints.append("Authentication")
+    if "file" in roles or "file" in sinks:
+        hints.append("File")
+    if "url" in sinks:
+        hints.extend(("Redirect", "SSRF"))
+    if "command" in sinks:
+        hints.append("Command Injection")
+    return list(dict.fromkeys(hints))
+
+
 def build_surface(policy: ScopePolicy, state: dict[str, Any], store: RunStore) -> dict[str, Any]:
     run_dir = store.run_dir(state["run_id"])
     normalized = run_dir / "normalize"
@@ -163,7 +180,7 @@ def build_surface(policy: ScopePolicy, state: dict[str, Any], store: RunStore) -
         route.update({"roles": roles, "sink_hints": sinks, "priority_score": score})
         if score >= 2:
             old = previous.get(route["route_id"], {})
-            candidates.append({**route, "priority": "P1" if score >= 6 else "P2" if score >= 4 else "P3", "route": route["origin"] + route["path"], "status": old.get("status", "unverified"), "notes": old.get("notes", ""), "next_action": "요청 method, 입력값과 접근 통제를 수동 확인한다."})
+            candidates.append({**route, "priority": "P1" if score >= 6 else "P2" if score >= 4 else "P3", "route": route["origin"] + route["path"], "test_hints": _test_hints(roles, sinks), "status": old.get("status", "unverified"), "notes": old.get("notes", ""), "next_action": "요청 method, 입력값과 접근 통제를 수동 확인한다."})
     ordered = sorted(routes.values(), key=lambda item: (item["origin"], item["path"], item["method"]))
     candidates = sorted(candidates, key=lambda item: (-item["priority_score"], item["route"]))[:20]
     coverage = {"observations": len(observations), "routes": len(ordered), "candidates": len(candidates), "stages": {name: item.get("status") for name, item in state["stages"].items()}}

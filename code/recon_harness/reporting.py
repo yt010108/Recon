@@ -87,20 +87,6 @@ def _important_comments(items: Any) -> list[dict[str, Any]]:
     return [item for _score, item in sorted(ranked, key=lambda row: -row[0])[:10]]
 
 
-def _important_assets(items: Any) -> list[dict[str, Any]]:
-    priorities = ("sourcemap", "source-map", "manifest", "dynamic-import", "chunk")
-    ranked = []
-    for item in items if isinstance(items, list) else []:
-        if not isinstance(item, dict):
-            continue
-        kind = str(item.get("kind") or "").lower()
-        value = str(item.get("url") or item.get("value") or "")
-        score = sum(term in f"{kind} {value.lower()}" for term in priorities)
-        if score:
-            ranked.append((score, value, item))
-    return [item for _score, _value, item in sorted(ranked, key=lambda row: (-row[0], row[1]))[:10]]
-
-
 def _important_routes(items: Any) -> list[dict[str, Any]]:
     routes = [
         item for item in items if isinstance(item, dict) and int(item.get("priority_score") or 0) >= 2
@@ -285,7 +271,6 @@ def build_stage_report(store: RunStore, state: dict[str, Any], stage: str) -> Pa
             "", "## 소스 분석 개수", "",
             f"- 주석: `{len(_json(run_dir / 'crawl' / 'source-comments.json', []))}`",
             f"- 엔드포인트: `{len(_json(run_dir / 'crawl' / 'source-endpoints.json', []))}`",
-            f"- 소스 자산: `{len(_json(run_dir / 'crawl' / 'source-assets.json', []))}`",
         ])
     elif stage == "discovery":
         routes = _discovery_routes(run_dir, policy)
@@ -328,10 +313,8 @@ def build_report(store: RunStore, state: dict[str, Any]) -> Path:
     dorks = _lines(run_dir / "collect" / "google-dorks.txt")
     source_endpoints = _json(run_dir / "crawl" / "source-endpoints.json", [])
     source_comments = _json(run_dir / "crawl" / "source-comments.json", [])
-    source_assets = _json(run_dir / "crawl" / "source-assets.json", [])
     important_endpoints = _important_endpoints(source_endpoints)
     important_comments = _important_comments(source_comments)
-    important_assets = _important_assets(source_assets)
     important_routes = _important_routes(surface["routes"])
     failures = [
         (stage, tool, result.get("error") or result.get("summary"))
@@ -366,7 +349,6 @@ def build_report(store: RunStore, state: dict[str, Any]) -> Path:
         "", "## 중요 소스 정보", "",
         f"- 엔드포인트: `{len(source_endpoints)}`개 중 `{len(important_endpoints)}`개 표시 (`crawl/source-endpoints.json`)",
         f"- 주석: `{len(source_comments)}`개 중 `{len(important_comments)}`개 표시 (`crawl/source-comments.json`)",
-        f"- 소스 자산: `{len(source_assets)}`개 중 `{len(important_assets)}`개 표시 (`crawl/source-assets.json`)",
         "", "### 중요 엔드포인트", "",
         "| Method | 엔드포인트 | 분류 | 출처 | 줄 |", "|---|---|---|---|---:|",
     ])
@@ -385,13 +367,6 @@ def build_report(store: RunStore, state: dict[str, Any]) -> Path:
         )
     if not important_comments:
         lines.append("| - | 중요 주석 없음 | - | - |")
-    lines.extend(["", "### 중요 소스 자산", "", "| 종류 | 자산 | 출처 |", "|---|---|---|"])
-    for item in important_assets:
-        lines.append(
-            f"| {_cell(item.get('kind'))} | {_cell(item.get('url') or item.get('value'))} | {_cell(item.get('source'))} |"
-        )
-    if not important_assets:
-        lines.append("| - | 중요 소스 자산 없음 | - |")
     lines.extend(["", "## 활성 서비스", "", "| URL | 상태 | 제목 | 기술 |", "|---|---:|---|---|"])
     for item in services[:30]:
         tech = item.get("tech") or item.get("technologies") or []

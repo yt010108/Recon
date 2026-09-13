@@ -8,7 +8,7 @@ from pathlib import Path
 from recon_harness.cli import render_scope_toml
 from recon_harness.policy import ScopePolicy
 from recon_harness.storage import RunStore
-from recon_harness.surface import build_surface
+from recon_harness.surface import _test_hints, build_surface
 
 
 class SurfaceTests(unittest.TestCase):
@@ -42,6 +42,12 @@ class SurfaceTests(unittest.TestCase):
         parameth_route = next(item for item in result["routes"] if item["path"] == "/search")
         self.assertEqual(parameth_route["query_parameters"], ["debug"])
         self.assertEqual(parameth_route["evidence"][0]["tool"], "parameth")
+
+    def test_manual_review_hints(self) -> None:
+        self.assertEqual(
+            _test_hints(["auth"], ["object", "url"]),
+            ["IDOR", "AuthZ", "Authentication", "Redirect", "SSRF"],
+        )
 
 
 if __name__ == "__main__":

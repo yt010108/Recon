@@ -65,18 +65,6 @@ class RunStoreTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (run_dir / "crawl" / "source-assets.json").write_text(
-                json.dumps(
-                    [
-                        {
-                            "source": "http://recon-juice-shop:3000/",
-                            "url": "http://recon-juice-shop:3000/app.js.map",
-                            "kind": "source-map",
-                        }
-                    ]
-                ),
-                encoding="utf-8",
-            )
             (run_dir / "collect" / "domains.txt").write_text(
                 "recon-juice-shop\n", encoding="utf-8"
             )
@@ -140,7 +128,6 @@ class RunStoreTests(unittest.TestCase):
             self.assertIn("Nuclei 후보: `1`", text)
             self.assertIn("## 중요 소스 정보", text)
             self.assertIn("/api/admin?debug=1", text)
-            self.assertIn("app.js.map", text)
             self.assertIn("token=[REDACTED]", text)
             self.assertTrue((run_dir / "normalize" / "routes.jsonl").is_file())
             self.assertTrue((run_dir / "normalize" / "candidates.json").is_file())

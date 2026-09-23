@@ -18,7 +18,7 @@ Pi에서 `/recon`을 입력하면 허용 대상을 묻고 바로 실행한다. P
 |---|---|
 | collect | Dorkgen, Subfinder, Assetfinder, Amass passive, Waybackurls |
 | probe | HTTPX, `robots.txt` |
-| crawl | Katana, HTML/CSS/JS 주석·엔드포인트 수집 |
+| crawl | Katana (`-hl -xhr`), HTML/CSS/JS 주석·엔드포인트 수집 |
 | discovery | 출처 통합 URL 큐·최대 2회 재확인, 선택형 Gobuster dir, Parameth 후보 생성 |
 | normalize | 값만 다른 URL을 기능 route로 합치고 상위 검토 후보 20개 선정 |
 

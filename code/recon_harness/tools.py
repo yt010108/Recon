@@ -672,7 +672,7 @@ class ToolRunner:
     def run_katana(self, policy: ScopePolicy, state: dict[str, Any]) -> ToolOutcome:
         remote = self._copy_lines_input(state, "crawl", "katana-input.txt", self._live_urls(policy, state))
         depth = 2
-        args = ["katana", "-list", remote, "-silent", "-d", str(depth), "-jc"]
+        args = ["katana", "-list", remote, "-silent", "-d", str(depth), "-jc", "-hl", "-xhr"]
         for pattern in _katana_scope_regexes(policy):
             args.extend(["-cs", pattern])
         result = self.backend.run(

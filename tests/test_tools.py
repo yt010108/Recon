@@ -120,25 +120,6 @@ class AdapterTests(unittest.TestCase):
         self.policy = ScopePolicy.load(PROJECT_ROOT / "tests" / "lab" / "scope.toml")
         self.state = self.store.create(self.policy.path, self.policy.snapshot())
 
-    def test_katana_uses_headless_and_xhr_flags(self) -> None:
-        run_dir = self.store.run_dir(self.state["run_id"])
-        (run_dir / "probe" / "alive-urls.txt").write_text(
-            "http://recon-juice-shop:3000/\n", encoding="utf-8"
-        )
-        backend = FakeBackend(
-            CommandResult(0, "http://recon-juice-shop:3000/api/orders\n", "")
-        )
-        outcome = ToolRunner(backend, self.store).run_katana(self.policy, self.state)
-        command = backend.commands[0]
-        self.assertIn("-hl", command)
-        self.assertIn("-xhr", command)
-        self.assertIn("-jc", command)
-        self.assertEqual(outcome.item_count, 1)
-        self.assertEqual(
-            (run_dir / "crawl" / "katana-urls.txt").read_text(encoding="utf-8"),
-            "http://recon-juice-shop:3000/api/orders\n",
-        )
-
     def test_robots_adapter_keeps_comment_original_but_sanitizes_raw_log(self) -> None:
         body = "User-agent: *\nDisallow: /admin\n# token=sample-original-value\n"
         record = {

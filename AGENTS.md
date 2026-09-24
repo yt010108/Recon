@@ -52,13 +52,12 @@ runs/<RUN_ID>/
 ├── discovery/
 │   ├── raw/
 │   └── report.md
-├── normalize/
-│   ├── raw/
-│   ├── report.md
-│   ├── routes.jsonl
-│   ├── candidates.json
-│   └── coverage.json
-└── screenshots/
+└── normalize/
+    ├── raw/
+    ├── report.md
+    ├── routes.jsonl
+    ├── candidates.json
+    └── coverage.json
 ```
 
 `progress.md`가 실행 상태와 재개 기준이다. 각 단계의 원본만 `<단계>/raw/`에 두고, 가공 결과는 별도 result/parsed 폴더 없이 `<단계>/` 바로 아래에 둔다. `runs/`와 자격 증명은 커밋하지 않는다.

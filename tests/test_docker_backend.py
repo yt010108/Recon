@@ -53,7 +53,6 @@ class DockerBackendTests(unittest.TestCase):
                     ["which", "httpx"],
                     input_text="input\n",
                     process_timeout=30,
-                    environment={"TEST_MODE": "1"},
                 )
 
         command = mocked.call_args.args[0]
@@ -62,7 +61,6 @@ class DockerBackendTests(unittest.TestCase):
         self.assertIn("--pull=never", command)
         self.assertIn("--network", command)
         self.assertIn("recon-lab", command)
-        self.assertIn("TEST_MODE=1", command)
         self.assertNotIn("--read-only", command)
         self.assertNotIn("--cap-drop", command)
         self.assertNotIn("--memory", command)

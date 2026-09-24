@@ -6,13 +6,12 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from .deep_discovery import DeepDiscoveryToolRunner
 from .docker_backend import NUCLEI_IMAGE, DockerBackend
 from .models import LOCAL_TOOLS, STAGE_ORDER, stage_for_tool, tools_for_stage, validate_stage
 from .policy import PolicyError, ScopePolicy
 from .storage import RunStore, utc_now
 from .surface import run_local_surface
-from .tools import ToolOutcome, run_local_dorkgen
+from .tools import ToolOutcome, ToolRunner, run_local_dorkgen
 
 
 class HarnessRunner:
@@ -21,7 +20,7 @@ class HarnessRunner:
         self._io_lock = threading.RLock()
 
     def _run_remote_tool(self, tool: str, policy: ScopePolicy, state: dict[str, Any]):
-        return DeepDiscoveryToolRunner(
+        return ToolRunner(
             self._backend_for_tool(policy, state["run_id"], tool),
             self.store,
             self._io_lock,
@@ -187,7 +186,7 @@ class HarnessRunner:
             if tool in LOCAL_TOOLS:
                 outcome = self._run_local_tool(tool, policy, state)
             else:
-                adapter = DeepDiscoveryToolRunner(backend, self.store, self._io_lock)
+                adapter = ToolRunner(backend, self.store, self._io_lock)
                 outcome = (
                     adapter.run_parameth(policy, state, target_url=target_url)
                     if tool == "parameth"

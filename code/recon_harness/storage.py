@@ -57,7 +57,6 @@ class RunStore:
         run_dir = self.root / run_id
         for stage in STAGE_ORDER:
             (run_dir / stage / "raw").mkdir(parents=True)
-        (run_dir / "screenshots").mkdir()
         state = {
             "run_id": run_id,
             "status": "ready",

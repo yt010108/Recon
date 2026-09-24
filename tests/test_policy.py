@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from recon_harness.cli import render_scope_toml
-from recon_harness.models import STAGE_ORDER, TOOL_NAMES, stage_for_tool, tools_for_stage
+from recon_harness.models import STAGE_ORDER, TOOL_NAMES, stage_for_tool, tools_for_stage, validate_stage
 from recon_harness.policy import PolicyError, ScopePolicy
 
 
@@ -31,18 +31,16 @@ class ScopePolicyTests(unittest.TestCase):
             policy.validate_url("https://example.net/")
 
     def test_every_recon_stage_is_available(self) -> None:
-        policy = ScopePolicy.load(EXAMPLE_SCOPE)
-        self.assertEqual(policy.validate_stage("discovery"), "discovery")
-        self.assertEqual(policy.validate_stage("crawl"), "crawl")
+        self.assertEqual(validate_stage("discovery"), "discovery")
+        self.assertEqual(validate_stage("crawl"), "crawl")
         juice = ScopePolicy.load(LAB_SCOPE)
         self.assertEqual(juice.docker_network, "recon-lab")
-        self.assertEqual(juice.validate_stage("discovery"), "discovery")
+        self.assertEqual(validate_stage("discovery"), "discovery")
 
     def test_scan_stage_is_not_part_of_recon(self) -> None:
         self.assertEqual(STAGE_ORDER, ("collect", "probe", "crawl", "discovery", "normalize"))
-        policy = ScopePolicy.load(LAB_SCOPE)
         with self.assertRaises(ValueError):
-            policy.validate_stage("scan")
+            validate_stage("scan")
 
     def test_tool_maps_to_its_stage(self) -> None:
         self.assertEqual(stage_for_tool("httpx"), "probe")

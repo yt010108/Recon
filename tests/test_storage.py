@@ -23,7 +23,6 @@ class RunStoreTests(unittest.TestCase):
             self.assertTrue((run_dir / "scope.toml").is_file())
             self.assertFalse((run_dir / "state.json").exists())
             self.assertFalse((run_dir / "events.jsonl").exists())
-            self.assertTrue((run_dir / "screenshots").is_dir())
             for stage in ("collect", "probe", "crawl", "discovery", "normalize"):
                 self.assertTrue((run_dir / stage / "raw").is_dir())
             self.assertFalse((run_dir / "raw").exists())

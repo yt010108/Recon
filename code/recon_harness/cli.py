@@ -34,10 +34,6 @@ def normalize_target(value: str) -> tuple[str, str]:
     return host, base_url
 
 
-def normalize_domain(value: str) -> str:
-    return normalize_target(value)[0]
-
-
 def render_scope_toml(
     target: str,
     domain_timeout: int = DEFAULT_DOMAIN_TIMEOUT,

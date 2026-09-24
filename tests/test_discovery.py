@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from recon_harness.deep_discovery import DeepDiscoveryToolRunner
+from recon_harness.tools import ToolRunner
 from recon_harness.discovery import DiscoveryRunner
 from recon_harness.docker_backend import CommandResult
 from recon_harness.policy import ScopePolicy
@@ -94,7 +94,7 @@ class DiscoveryTests(unittest.TestCase):
         )
 
         outcome = DiscoveryRunner(
-            DeepDiscoveryToolRunner(FakeBackend(CommandResult(0, "", "")), store),
+            ToolRunner(FakeBackend(CommandResult(0, "", "")), store),
             store,
         ).run(policy, state)
 
@@ -118,7 +118,7 @@ class DiscoveryTests(unittest.TestCase):
             CommandResult(0, last + "\n", ""),
         )
 
-        DiscoveryRunner(DeepDiscoveryToolRunner(backend, store), store).run(policy, state)
+        DiscoveryRunner(ToolRunner(backend, store), store).run(policy, state)
 
         self.assertEqual(state["discovery"]["rounds"], 2)
         self.assertEqual(state["discovery"]["stop_reason"], "max_rounds")
@@ -134,14 +134,14 @@ class DiscoveryTests(unittest.TestCase):
             CommandResult(0, _record(page) + "\n", ""),
             CommandResult(1, "", "katana failed"),
         )
-        outcome = DiscoveryRunner(DeepDiscoveryToolRunner(first, store), store).run(policy, state)
+        outcome = DiscoveryRunner(ToolRunner(first, store), store).run(policy, state)
         self.assertEqual(outcome.exit_code, 1)
         self.assertEqual(state["discovery"]["rounds"], 0)
         store.save(state)
 
         resumed = store.load(state["run_id"])
         second = FakeBackend(CommandResult(0, "", ""))
-        outcome = DiscoveryRunner(DeepDiscoveryToolRunner(second, store), store).run(policy, resumed)
+        outcome = DiscoveryRunner(ToolRunner(second, store), store).run(policy, resumed)
 
         self.assertEqual(outcome.exit_code, 0)
         self.assertEqual(resumed["discovery"]["rounds"], 1)
@@ -157,7 +157,7 @@ class DiscoveryTests(unittest.TestCase):
             CommandResult(0, "", ""),
         )
 
-        DiscoveryRunner(DeepDiscoveryToolRunner(backend, store), store).run(policy, state)
+        DiscoveryRunner(ToolRunner(backend, store), store).run(policy, state)
 
         seeds = (run_dir / "discovery" / "raw" / "discovery-katana-r1-input.txt").read_text(encoding="utf-8").splitlines()
         self.assertEqual(len(seeds), 3)

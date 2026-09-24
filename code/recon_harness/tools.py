@@ -340,6 +340,13 @@ class ToolRunner:
     def run_dorkgen(self, policy: ScopePolicy, state: dict[str, Any]) -> ToolOutcome:
         return run_local_dorkgen(policy, state, self.store)
 
+    def run_url_discovery(
+        self, policy: ScopePolicy, state: dict[str, Any]
+    ) -> ToolOutcome:
+        from .discovery import DiscoveryRunner
+
+        return DiscoveryRunner(self, self.store).run(policy, state)
+
     @staticmethod
     def _domain_in_scope(policy: ScopePolicy, domain: str) -> bool:
         """허용 포트 중 하나를 붙여 도메인이 스코프에 속하는지 확인한다."""

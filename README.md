@@ -51,13 +51,12 @@ runs/<RUN_ID>/
 │   ├── raw/
 │   ├── report.md
 │   └── url-queue.jsonl
-├── normalize/
-│   ├── raw/
-│   ├── report.md
-│   ├── routes.jsonl
-│   ├── candidates.json
-│   └── coverage.json
-└── screenshots/
+└── normalize/
+    ├── raw/
+    ├── report.md
+    ├── routes.jsonl
+    ├── candidates.json
+    └── coverage.json
 ```
 
 Wayback·robots.txt·Katana·source 결과는 출처를 보존한 `discovery/url-queue.jsonl`로 합친다.

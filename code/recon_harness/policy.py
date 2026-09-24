@@ -11,7 +11,6 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .docker_backend import DEFAULT_IMAGE
-from .models import validate_stage
 
 
 DEFAULT_DOMAIN_TIMEOUT = 180
@@ -116,9 +115,6 @@ class ScopePolicy:
         if effective_port not in self.allowed_ports:
             raise PolicyError(f"Port {effective_port} is outside the configured scope")
         return value
-
-    def validate_stage(self, stage: str) -> str:
-        return validate_stage(stage)
 
     def snapshot(self) -> dict[str, Any]:
         return {

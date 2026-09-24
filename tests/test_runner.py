@@ -67,7 +67,7 @@ class RunnerSelectionTests(unittest.TestCase):
 
         with (
             patch.object(runner, "_backend_for_tool", return_value=object()),
-            patch("recon_harness.runner.DeepDiscoveryToolRunner") as tools,
+            patch("recon_harness.runner.ToolRunner") as tools,
         ):
             tools.return_value.run.side_effect = [
                 ToolOutcome(0, "url discovery", 1),
@@ -86,7 +86,7 @@ class RunnerSelectionTests(unittest.TestCase):
         runner = HarnessRunner(store)
         with (
             patch.object(runner, "_backend_for_tool", return_value=object()),
-            patch("recon_harness.runner.DeepDiscoveryToolRunner") as tools,
+            patch("recon_harness.runner.ToolRunner") as tools,
         ):
             tools.return_value.run.return_value = ToolOutcome(0, "url discovery", 1)
             finished = runner.run_stage(state["run_id"], "discovery")
@@ -108,7 +108,7 @@ class RunnerSelectionTests(unittest.TestCase):
         runner = HarnessRunner(store)
         with (
             patch("recon_harness.runner.DockerBackend") as backend,
-            patch("recon_harness.runner.DeepDiscoveryToolRunner") as tools,
+            patch("recon_harness.runner.ToolRunner") as tools,
         ):
             backend.return_value.require_ready.return_value = None
             tools.return_value.run.return_value = ToolOutcome(0, "one host", 1)
@@ -140,7 +140,7 @@ class RunnerSelectionTests(unittest.TestCase):
         with (
             patch.object(runner, "_run_local_tool", return_value=ToolOutcome(0, "dorkgen", 0)),
             patch.object(runner, "_backend_for_tool", return_value=object()),
-            patch("recon_harness.runner.DeepDiscoveryToolRunner") as tools,
+            patch("recon_harness.runner.ToolRunner") as tools,
         ):
             tools.return_value.run.side_effect = complete
             result = runner.run_stage(state["run_id"], "collect")
@@ -153,7 +153,7 @@ class RunnerSelectionTests(unittest.TestCase):
         runner = HarnessRunner(store)
         with (
             patch("recon_harness.runner.DockerBackend") as backend,
-            patch("recon_harness.runner.DeepDiscoveryToolRunner") as tools,
+            patch("recon_harness.runner.ToolRunner") as tools,
         ):
             backend.return_value.require_ready.return_value = None
             tools.return_value.run.return_value = ToolOutcome(0, "one finding", 1)

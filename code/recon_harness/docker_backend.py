@@ -113,7 +113,6 @@ class DockerBackend:
         *,
         input_text: str | None = None,
         process_timeout: int = 900,
-        environment: dict[str, str] | None = None,
     ) -> CommandResult:
         if not args or any("\x00" in str(item) for item in args):
             raise BackendError("Invalid empty command or NUL byte")
@@ -142,10 +141,6 @@ class DockerBackend:
                     f"type=bind,source={input_dir},target={REMOTE_INPUT_DIR}",
                 ]
             )
-        for key, value in (environment or {}).items():
-            if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", key):
-                raise BackendError(f"Invalid environment variable name: {key}")
-            command.extend(["-e", f"{key}={value}"])
         command.extend(
             [
                 self.image,

@@ -57,7 +57,6 @@ class HarnessRunner:
         normalized = validate_stage(stage)
         state = self.store.load(run_id)
         policy = self.policy_for_run(state)
-        policy.validate_stage(normalized)
 
         stage_state = state["stages"][normalized]
         # 완료 단계는 재실행하지 않는다. 실패 단계만 감사 기록을 보존한 채 재시도한다.

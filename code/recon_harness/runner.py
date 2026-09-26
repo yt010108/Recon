@@ -6,7 +6,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from .docker_backend import NUCLEI_IMAGE, DockerBackend
+from .docker_backend import DEFAULT_IMAGE, NUCLEI_IMAGE, DockerBackend
 from .models import LOCAL_TOOLS, STAGE_ORDER, stage_for_tool, tools_for_stage, validate_stage
 from .policy import PolicyError, ScopePolicy
 from .storage import RunStore, utc_now
@@ -32,7 +32,7 @@ class HarnessRunner:
     def _backend_for_tool(
         self, policy: ScopePolicy, run_id: str, tool: str
     ) -> DockerBackend:
-        image = NUCLEI_IMAGE if tool == "nuclei" else policy.worker_image
+        image = NUCLEI_IMAGE if tool == "nuclei" else DEFAULT_IMAGE
         backend = DockerBackend(
             image,
             workspace_dir=self.store.run_dir(run_id),

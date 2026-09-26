@@ -17,7 +17,6 @@ LAB_SCOPE = PROJECT_ROOT / "tests" / "lab" / "scope.toml"
 class ScopePolicyTests(unittest.TestCase):
     def test_example_scope_allows_root_and_subdomain(self) -> None:
         policy = ScopePolicy.load(EXAMPLE_SCOPE)
-        self.assertEqual(policy.worker_image, "local/hermes-recon-web:0.1")
         self.assertIsNone(policy.docker_network)
         self.assertEqual(policy.validate_url("https://example.com/"), "https://example.com/")
         self.assertEqual(
@@ -59,7 +58,7 @@ class ScopePolicyTests(unittest.TestCase):
             policy = ScopePolicy.load(path)
         self.assertIn("domain_timeout = 180", rendered)
         self.assertEqual(policy.domain_timeout, 180)
-        self.assertEqual(policy.name, "example.com")
+        self.assertEqual(policy.domain, "example.com")
         self.assertEqual(policy.base_url, "https://Example.com/path")
 
     def test_ip_target_is_supported_without_domain_expansion(self) -> None:

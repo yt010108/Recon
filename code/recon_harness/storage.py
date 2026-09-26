@@ -53,7 +53,7 @@ class RunStore:
 
     def create(self, scope_path: Path, scope_snapshot: dict[str, Any]) -> dict[str, Any]:
         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-        run_id = f"{stamp}-{_slug(scope_snapshot['name'])}-{uuid.uuid4().hex[:6]}"
+        run_id = f"{stamp}-{_slug(scope_snapshot['domain'])}-{uuid.uuid4().hex[:6]}"
         run_dir = self.root / run_id
         for stage in STAGE_ORDER:
             (run_dir / stage / "raw").mkdir(parents=True)

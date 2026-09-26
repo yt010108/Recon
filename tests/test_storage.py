@@ -30,7 +30,7 @@ class RunStoreTests(unittest.TestCase):
             self.assertFalse((run_dir / "normalized").exists())
             self.assertTrue((run_dir / "progress.md").is_file())
             loaded = store.load(state["run_id"])
-            self.assertEqual(loaded["scope"]["name"], "recon-juice-shop")
+            self.assertEqual(loaded["scope"]["domain"], "recon-juice-shop")
 
     def test_report_is_created_and_registered(self) -> None:
         policy = ScopePolicy.load(PROJECT_ROOT / "tests" / "lab" / "scope.toml")

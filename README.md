@@ -73,8 +73,7 @@ Parameth는 자동 실행하지 않고 `discovery/parameth-targets.txt`에서 �
 루트 `report.md`는 Normalize 완료 후 만드는 최종 보고서다.
 
 `report.md`는 중요 route 최대 50개를 Method·파라미터·중요도만 포함한 사이트맵으로
-보여준다. 별도로 중요 엔드포인트 최대 20개, 보안 관련 주석 최대 10개,
-source map·manifest·동적 chunk 등 중요 소스 자산 최대 10개만 보여준다.
+보여준다. 별도로 중요 엔드포인트 최대 20개와 보안 관련 주석 최대 10개를 보여준다.
 민감한 값은 보고서에서 가리고 원본 JSON에는 수집 결과를 그대로 보존한다.
 
 `scope.toml`은 허용 도메인/IP와 시작 URL을 저장한다.

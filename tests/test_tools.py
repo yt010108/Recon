@@ -15,6 +15,7 @@ from recon_harness.tools import (
     _extract_html_comments,
     _extract_source_endpoints,
     _response_body,
+    run_local_dorkgen,
 )
 
 
@@ -144,7 +145,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_dorkgen_writes_queries_without_backend_calls(self) -> None:
         backend = FakeBackend()
-        outcome = ToolRunner(backend, self.store).run_dorkgen(self.policy, self.state)
+        outcome = run_local_dorkgen(self.policy, self.state, self.store)
         path = self.store.run_dir(self.state["run_id"]) / "collect" / "google-dorks.txt"
         lines = path.read_text(encoding="utf-8").splitlines()
         self.assertGreater(len(lines), 50)

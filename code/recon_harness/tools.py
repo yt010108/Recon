@@ -33,7 +33,7 @@ def run_local_dorkgen(
     """Google에 접속하지 않고 검색식만 run 아티팩트로 생성한다."""
     if not policy.is_domain:
         return ToolOutcome(0, "Dork generation requires a domain", skipped=True)
-    dorks = generate_dorks(policy.root_domain)
+    dorks = generate_dorks(policy.domain)
     destination = store.run_dir(state["run_id"]) / "collect" / "google-dorks.txt"
     destination.write_text("\n".join(dorks) + "\n", encoding="utf-8", newline="\n")
     store.add_artifact(state, destination, "queries", "dorkgen")
@@ -337,9 +337,6 @@ class ToolRunner:
             raise ValueError(f"No adapter for tool: {tool}")
         return method(policy, state)
 
-    def run_dorkgen(self, policy: ScopePolicy, state: dict[str, Any]) -> ToolOutcome:
-        return run_local_dorkgen(policy, state, self.store)
-
     def run_url_discovery(
         self, policy: ScopePolicy, state: dict[str, Any]
     ) -> ToolOutcome:
@@ -370,7 +367,7 @@ class ToolRunner:
         with self.io_lock:
             domains_path = self.store.run_dir(state["run_id"]) / "collect" / "domains.txt"
             existing = _unique_lines(domains_path.read_text(encoding="utf-8")) if domains_path.exists() else []
-            merged: set[str] = {policy.root_domain}
+            merged: set[str] = {policy.domain}
             for candidate in existing + discovered:
                 domain = candidate.strip().lower().removeprefix("*.").rstrip(".")
                 if not domain or any(character in domain for character in "/@? #"):
@@ -388,7 +385,7 @@ class ToolRunner:
         if not policy.is_domain:
             return ToolOutcome(0, "Subfinder requires a domain", skipped=True)
         result = self.backend.run(
-            ["subfinder", "-d", policy.root_domain, "-silent"], process_timeout=policy.domain_timeout
+            ["subfinder", "-d", policy.domain, "-silent"], process_timeout=policy.domain_timeout
         )
         self._write_result(state, "subfinder", result)
         domains = self._merge_domains(policy, state, "subfinder", _unique_lines(result.stdout))
@@ -403,7 +400,7 @@ class ToolRunner:
         if not policy.is_domain:
             return ToolOutcome(0, "Assetfinder requires a domain", skipped=True)
         result = self.backend.run(
-            ["assetfinder", "--subs-only", policy.root_domain], process_timeout=policy.domain_timeout
+            ["assetfinder", "--subs-only", policy.domain], process_timeout=policy.domain_timeout
         )
         self._write_result(state, "assetfinder", result)
         domains = self._merge_domains(policy, state, "assetfinder", _unique_lines(result.stdout))
@@ -419,7 +416,7 @@ class ToolRunner:
         if not policy.is_domain:
             return ToolOutcome(0, "Amass enumeration requires a domain", skipped=True)
         result = self.backend.run(
-            ["amass", "enum", "-passive", "-d", policy.root_domain],
+            ["amass", "enum", "-passive", "-d", policy.domain],
             process_timeout=policy.domain_timeout,
         )
         self._write_result(state, "amass_enum", result)
@@ -433,7 +430,7 @@ class ToolRunner:
 
     def run_waybackurls(self, policy: ScopePolicy, state: dict[str, Any]) -> ToolOutcome:
         result = self.backend.run(
-            ["waybackurls"], input_text=policy.root_domain + "\n", process_timeout=policy.domain_timeout
+            ["waybackurls"], input_text=policy.domain + "\n", process_timeout=policy.domain_timeout
         )
         self._write_result(state, "waybackurls", result)
         urls: list[str] = []

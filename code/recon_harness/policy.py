@@ -10,9 +10,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from .docker_backend import DEFAULT_IMAGE
-
-
 DEFAULT_DOMAIN_TIMEOUT = 180
 
 
@@ -31,16 +28,13 @@ class ScopePolicy:
     domain: str
     base_url: str
     docker_network: str | None = None
-    worker_image: str = DEFAULT_IMAGE
     domain_timeout: int = DEFAULT_DOMAIN_TIMEOUT
     run_gobuster: bool = False
-    domains: list[str] = field(init=False)
     allowed_ports: list[int] = field(init=False)
     is_ip: bool = field(init=False)
     is_domain: bool = field(init=False)
 
     def __post_init__(self) -> None:
-        self.domains = [self.domain]
         try:
             ipaddress.ip_address(self.domain)
             self.is_ip = True
@@ -90,14 +84,6 @@ class ScopePolicy:
         policy.validate_url(base_url)
         return policy
 
-    @property
-    def name(self) -> str:
-        return self.domain
-
-    @property
-    def root_domain(self) -> str:
-        return self.domain
-
     def validate_url(self, value: str) -> str:
         # 모든 네트워크 어댑터가 요청 직전에 이 경계를 다시 검사한다.
         try:
@@ -118,13 +104,10 @@ class ScopePolicy:
 
     def snapshot(self) -> dict[str, Any]:
         return {
-            "name": self.name,
+            "domain": self.domain,
             "base_url": self.base_url,
-            "domains": self.domains,
             "allowed_ports": self.allowed_ports,
-            "target_type": "ip" if self.is_ip else "domain",
             "domain_timeout": self.domain_timeout,
             "run_gobuster": self.run_gobuster,
-            "worker_image": self.worker_image,
             "docker_network": self.docker_network,
         }

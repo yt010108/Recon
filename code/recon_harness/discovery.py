@@ -150,7 +150,7 @@ class DiscoveryRunner:
             if url := _canonical_url(policy, value):
                 probed.add(url)
                 live.add(url)
-        for name in ("robots_txt.jsonl", "source_comments.jsonl", "source_assets.jsonl"):
+        for name in ("robots_txt.jsonl", "source_comments.jsonl"):
             stage = "probe" if name == "robots_txt.jsonl" else "crawl"
             path = run_dir / stage / "raw" / name
             if not path.exists():
